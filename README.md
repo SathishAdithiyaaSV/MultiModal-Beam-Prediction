@@ -1,0 +1,322 @@
+# Multimodal mmWave Beam Prediction — Preprocessing
+
+Preprocessing pipeline for the **DeepSense6G 2022 Multi-Modal Beam Prediction**
+dataset, restricted to **scenarios 31–34**.
+
+The scripts are adapted from the TII challenge solution ("Multimodal Transformers
+for Wireless Communications: A Case Study in Beam Prediction"); the signal
+processing is unchanged, the hardcoded paths and the Open3D/torchvision
+dependencies are not. See §3 and §5.
+
+Task: predict the best beam out of a **64-beam codebook** from 5 RGB frames,
+5 LiDAR sweeps, 5 radar cubes and the first 2 GPS positions. The target is the
+64-dim mmWave power vector; the optimal beam is its `argmax`.
+
+> Scope discipline: the 2023 V2V dataset and all other DeepSense scenarios are
+> out of scope. `preprocessing/config.py` hardcodes scenarios 31–34 and nothing
+> reaches outside `data/raw/`.
+
+---
+
+## 1. Repository layout
+
+```
+.
+├── README.md
+├── requirements.txt
+├── data/
+│   ├── raw/
+│   │   ├── development/                 # official "Multi_Modal" dev set (scen 32,33,34)
+│   │   │   ├── ml_challenge_dev_multi_modal.csv
+│   │   │   └── scenario3X/unit1/{camera_data,lidar_data,radar_data,mmWave_data,GPS_data}
+│   │   │                    /unit2/GPS_data
+│   │   └── adaptation/                  # official "Adaptation_dataset_multi_modal" (scen 31,32,33)
+│   │       ├── ml_challenge_data_adaptation_multi_modal.csv
+│   │       └── scenario3X/...
+│   └── processed/                       # generated; git-ignored
+│       ├── lidar_background/            # scenario3X_background.ply
+│       ├── development/scenario3X/{radar_ang,radar_vel,lidar}/
+│       ├── adaptation/scenario3X/{radar_ang,radar_vel,lidar}/
+│       ├── development_aug/ , adaptation_aug/
+│       └── index/{samples.csv,beam_pwr.npy,split_summary.csv,meta.json}
+├── preprocessing/
+│   ├── config.py                 # single source of truth: paths, scenarios, all constants
+│   ├── ply_io.py                 # numpy PLY reader/writer (replaces Open3D)
+│   ├── audit_dataset.py          # raw-data sanity check (shapes, alignment, labels)
+│   ├── preprocess_radar.py       # radar cube -> range-angle + range-velocity maps
+│   ├── preprocess_lidar.py       # static-background estimation + background removal
+│   ├── build_index.py            # unified index, power vectors, difficulty, splits
+│   ├── augment_{radar,lidar,image}.py
+│   └── run_preprocessing.sh      # end-to-end driver
+└── references/                   # reference-paper index (PDFs are git-ignored)
+```
+
+The two raw directories were renamed from `Training_dataset` / `Testing_dataset`
+to `development` / `adaptation` because that is what they actually are:
+`Testing_dataset` holds `ml_challenge_data_adaptation_multi_modal.csv`, i.e. the
+100-sample **adaptation** set, not a test set. The challenge's unlabelled
+`Multi_Modal_Test` split is not part of this copy, so all train/val/test splits
+are cut from the development set (see §6).
+
+---
+
+## 2. Raw data format (verified, not assumed)
+
+| Modality | Path | Shape / format |
+|---|---|---|
+| RGB | `unit1/camera_data/image_<f>.jpg` | 960×540 RGB JPEG |
+| Radar | `unit1/radar_data/radar_data_<f>.npy` | `(4, 256, 250)` complex64 — 4 RX antennas × 256 samples/chirp × 250 chirps |
+| LiDAR | `unit1/lidar_data/lidar_data_<f>.ply` | ascii PLY, ~16k–18k points, `double x,y,z` + `ushort intensity` |
+| GPS (BS) | `unit1/GPS_data/gps_location.txt` | one static `lat`/`lon` per scenario |
+| GPS (UE) | `unit2/GPS_data/GPS_location_<f>.txt` | per-frame `lat`/`lon` |
+| Power | `unit1/mmWave_data/mmWave_power_<f>.txt` | 64 floats — the beam power vector |
+| Label | `unit1_beam` column | **1-indexed** beam, `== argmax(power) + 1` |
+
+Frame stride inside a 5-observation sequence is **2** in the development set and
+**1** in the adaptation set. RGB/radar/LiDAR share the same frame indices, and
+`unit2_loc_1/2` align with observations 1–2. All of this is asserted by
+`audit_dataset.py`.
+
+---
+
+## 3. Environment
+
+`open3d` has **no wheels for Python 3.14** (the interpreter on this machine), and
+the project directory name contains a `:`, which `venv` refuses to create in.
+So the venv lives outside the project and Open3D/torchvision are not used:
+
+```bash
+python3 -m venv ~/.venvs/beamprep
+~/.venvs/beamprep/bin/pip install -r requirements.txt
+```
+
+Substitutions for the two Open3D / torchvision call sites, both 1:1:
+
+| Original | Replacement | Note |
+|---|---|---|
+| `open3d.io.read_point_cloud` / `write_point_cloud(write_ascii=True)` | `preprocessing/ply_io.py` | keeps x/y/z only, exactly as Open3D's `PointCloud` does (the `intensity` property is dropped either way) |
+| `open3d.geometry.KDTreeFlann` per-point loop | `scipy.spatial.cKDTree` batched query | same nearest neighbours, ~3 orders of magnitude faster |
+| `torchvision.transforms.functional.adjust_*` | `PIL.ImageEnhance` / `ImageFilter` | torchvision delegates to these for PIL inputs |
+
+---
+
+## 4. Commands to produce the preprocessed data
+
+Everything at once:
+
+```bash
+cd "/Users/rakshith/Desktop/pe_5g:6g"
+PY=~/.venvs/beamprep/bin/python bash preprocessing/run_preprocessing.sh
+```
+
+Or step by step (all paths come from `config.py`; nothing is hardcoded):
+
+```bash
+PY=~/.venvs/beamprep/bin/python
+
+# 0. sanity-check the raw data: existence, shapes, temporal alignment,
+#    GPS alignment, and argmax(power) == unit1_beam
+$PY preprocessing/audit_dataset.py                        # or --split adaptation
+#   add --quick to skip the exhaustive .ply readability scan (the slow part;
+#   it is what found the truncated file in §7.1)
+
+# 1. radar: (4,256,250) complex cube -> two (256,256) float32 maps in [0,1]
+$PY preprocessing/preprocess_radar.py --split all
+
+# 2. lidar: estimate the static background once per scenario
+$PY preprocessing/preprocess_lidar.py --stage background
+
+# 3. lidar: remove that background, leaving the vehicle foreground
+$PY preprocessing/preprocess_lidar.py --stage filter --split all
+
+# 4. unified index + power-vector matrix + difficulty metrics + splits
+$PY preprocessing/build_index.py
+```
+
+Optional augmentation (the TII pipeline augments the small adaptation set):
+
+```bash
+$PY preprocessing/augment_radar.py --split adaptation     # 1 jittered variant
+$PY preprocessing/augment_lidar.py --split adaptation     # 2 variants: downsample, jitter
+$PY preprocessing/augment_image.py --split adaptation     # 7 photometric variants
+```
+
+`run_preprocessing.sh` runs the exhaustive audit; every stage is idempotent, so
+re-running the driver after a partial run only does the missing work.
+
+Useful flags on every script: `--split {development,adaptation,all}`,
+`--scenario scenario33`, `--n-jobs N`, `--overwrite` (all steps are resumable
+and skip existing outputs by default).
+
+---
+
+## 5. What each step computes
+
+**Radar** (`preprocess_radar.py`, adapted from the TII reference implementation
+`Radar_data_preprocessing.py`, signal processing unchanged):
+- *range-angle map*: range FFT (axis 1) → subtract per-antenna chirp mean (static
+  clutter removal) → 256-point angle FFT (axis 0) → `|·|` summed over chirps → transpose.
+- *range-velocity map*: range FFT (axis 1) → 256-point velocity FFT (axis 2) →
+  `|·|` summed over antennas.
+- Both min-max normalised to `[0,1]`, saved as `(256, 256)` float32.
+
+**LiDAR** (`preprocess_lidar.py`, adapted from the TII reference implementation
+`Lidar_data_preprocessing.py`):
+- *Background estimation*: seed with the first frame having
+  ≥ `SCENARIO_MIN_POINTS` points (16400/18000/18000/18600 for 31/32/33/34), then
+  for each further admissible frame keep only background points whose nearest
+  neighbour in that frame is closer than `thr(p)`, replacing each survivor by the
+  midpoint of the pair. Non-recurring (moving) points erode away.
+- *Background removal*: drop every point whose nearest background neighbour is
+  closer than `thr(p)`.
+- `thr(p) = 0.3 + (5.0 − 0.3) · (‖p_xy‖ / 30)⁴` metres. Neighbours are found in
+  3D, the acceptance distance is measured in XY only — as in the reference.
+- Typical result: ~2.7 % of points survive (≈440 of ≈16.5k), i.e. the vehicle.
+
+Two deliberate, documented deviations: frames are visited in **sorted** order
+(the reference used `os.listdir` order, making its background non-reproducible),
+and background estimation is capped at `BACKGROUND_MAX_FRAMES = 200` frames.
+The reference estimated the background from the small `Multi_Modal_Test` split,
+which this copy does not contain; scenarios 32 and 34 therefore fall back to the
+development split (`config.BACKGROUND_SOURCE`).
+
+**Index** (`build_index.py`) — the one piece with no TII counterpart, added
+because the downstream plan needs it:
+- `samples.csv`: one row per sample, `sample_id`, `scenario`, `frame`, `split`,
+  0-indexed `beam`, GPS values, and paths to all raw RGB and all *processed*
+  radar/LiDAR files.
+- `beam_pwr.npy`: `(N, 64)` float32 power vectors; row `i` ↔ `pwr_row == i`.
+- Asserts `argmax(power) == unit1_beam − 1` for every indexed sample.
+- **Difficulty metrics** for the planned offline ambiguity analysis:
+  `margin_db` = `10·log10(P_best/P_2nd)`, `entropy_bits` = Shannon entropy of
+  `P/ΣP` in bits (0–6), `n_within_3db` = number of beams with `P ≥ P_best/2`,
+  `n_within_10pct` = number of beams with `P ≥ 0.9·P_best`.
+  These are derived from the **target** and are for offline analysis only —
+  never feed them to a model as an input feature. See §7.3 for why
+  `n_within_3db` is nearly useless on this data and `n_within_10pct` was added.
+
+---
+
+## 6. Splits
+
+The unlabelled challenge test split is absent, so train/val/test are cut from the
+development set and the adaptation set is held out whole as its own `adaptation`
+split.
+
+Consecutive DeepSense6G samples overlap in time and are strongly correlated, so a
+per-sample random split would leak test data into training. Instead, **contiguous
+blocks of 50 frames** are assigned whole to train/val/test (70/15/15) with a
+seeded shuffle, independently per scenario. Change with
+`--block`, `--seed`, `--train-frac`, `--val-frac`; the values used are recorded
+in `meta.json`. Per-scenario metrics (Top-1/Top-3/DBA) are directly available by
+grouping `samples.csv` on `scenario`.
+
+Resulting sizes (default `--block 50 --seed 2022`, scenario 34 excluded):
+
+| split | n | scenarios |
+|---|---|---|
+| `train` | 4794 | 32, 33 |
+| `val` | 1000 | 32, 33 |
+| `test` | 1100 | 32, 33 |
+| `adaptation` | 100 | 31, 32, 33 |
+| `excluded_nan_pwr` | 58 | 32, 33 (see §7.2) |
+
+Verified: zero frame overlap between the development splits, and every one of
+the 20 modality paths resolves for 200 randomly sampled rows. Residual
+correlation is confined to block boundaries — 72/500 scenario-32 and 51/600
+scenario-33 test frames lie within 4 frames of some train frame. Raise
+`--block` if you want that smaller.
+
+---
+
+## 7. Data-integrity findings
+
+All three were found by `audit_dataset.py`; none is caused by the pipeline.
+
+### 7.1 Scenario 34 is incomplete
+
+`audit_dataset.py` reports, for `development/scenario34` (4191 samples in the csv):
+
+| Modality | Status |
+|---|---|
+| RGB | complete (4439 files) |
+| **Radar** | **entirely missing** (no `radar_data/` directory) |
+| **LiDAR** | **only 1007 of 4439 files** — missing for ~77 % of samples |
+| **GPS `unit2`** | **entirely missing** (no `unit2/` directory) |
+| **mmWave power** | **entirely missing** (no `mmWave_data/` directory) |
+
+Consequences: scenario 34 has **no 64-beam power vectors**, so no regression
+target and no difficulty metrics; and no radar/GPS, so it cannot participate in
+any multimodal baseline or ablation. `build_index.py` therefore **excludes it by
+default** and prints a warning (override with `--allow-incomplete`, not
+recommended). Scenario 34 is currently a camera-and-partial-LiDAR-only,
+label-only scenario.
+
+**Action required:** re-download `scenario34` of the development set from
+DeepSense6G to restore scenarios 31–34 coverage. Everything else — development
+scenarios 32 and 33, and adaptation scenarios 31, 32, 33 — is complete and
+label-consistent (`argmax(power) + 1 == unit1_beam` for 100 % of samples).
+
+One further file, `development/scenario34/unit1/lidar_data/lidar_data_2163.ply`,
+is **truncated** (its header declares 18865 vertices, the body holds 10433
+values). The pipeline reports it and skips it instead of aborting; 1006 of the
+1007 scenario-34 clouds were processed.
+
+Note also that **scenario 31 appears only in the adaptation set** (50 samples).
+Even once scenario 34 is fixed, there is no scenario-31 training data in the
+2022 release, which matters when reporting per-scenario numbers.
+
+### 7.2 58 power vectors contain NaN, and their official labels are wrong
+
+58 development samples (20 in scenario 32, 38 in scenario 33) have literal `nan`
+tokens in their `mmWave_power_*.txt` file — 44 files with 1 NaN, 6 with 2, 2
+with 3, 6 with 9.
+
+For **all 58**, the official `unit1_beam` equals the index of the *first NaN*,
+never the argmax of the finite bins. The official labels were therefore produced
+by `np.argmax` on a NaN-containing vector (numpy returns the first NaN's index),
+so for these samples the label is not a real beam. This also explains why the
+naive check `argmax(power) + 1 == unit1_beam` passes at 100 % — both sides carry
+the same bug.
+
+`build_index.py` relabels them with `nanargmax`, keeps the official value in
+`beam_official`, records `pwr_n_nan`, and routes them to a separate
+`excluded_nan_pwr` split so they never enter train/val/test. `--keep-nan-pwr`
+overrides this. **Any baseline that trains on the official csv without this
+filter is training on 58 corrupt labels.**
+
+### 7.3 The 64-beam power vectors are much flatter than the 3-dB metric assumes
+
+Measured best-beam-to-worst-beam spread across the whole 64-beam vector:
+
+| Scenario | median spread | p5 | p95 |
+|---|---|---|---|
+| 32 | 2.60 dB | 0.76 | 6.29 |
+| 33 | 5.60 dB | 1.44 | 6.65 |
+| 31 (adaptation) | 4.41 dB | — | — |
+
+The top-1 vs top-2 margin has median **0.06 dB** (p95 0.28 dB). Consequences for
+the planned difficulty analysis:
+
+- `n_within_3db` **saturates**: its median is 64 for scenario 32 (i.e. *every*
+  beam is within 3 dB of the best) and ~22 for scenario 33. It carries almost no
+  information on scenario 32.
+- `n_within_10pct` (median 4–5 across all scenarios) and the continuous
+  `margin_db` / `entropy_bits` stay discriminative and should be the primary
+  ambiguity measures.
+- `entropy_bits` sits at ~5.9 of a maximum 6.0, again reflecting how flat the
+  distributions are.
+
+This is worth confirming against the DeepSense6G documentation before building
+the beam-ambiguity analysis on top of it, since it strongly affects what
+"ambiguous sample" can mean here.
+
+---
+
+## 8. Next steps (not part of preprocessing)
+
+Per the project plan: run the official GPS-only LSTM baseline as a label/eval
+sanity check, then reproduce the TII multimodal Transformer on top of these
+processed tensors, then AMBER, then the modality ablations and the
+difficulty / marginal-utility analysis that `margin_db`, `entropy_bits` and
+`n_within_3db` were added for.
