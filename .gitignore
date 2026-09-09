@@ -2,6 +2,7 @@
 # derived with preprocessing/run_preprocessing.sh
 data/raw/
 data/processed/
+data/processed_amber/
 
 # Reference papers are kept locally but not redistributed (see references/README.md)
 references/*.pdf
