@@ -14,17 +14,18 @@ SINGLE joint min-max, not one per map:
   Xbar[t] = Concat(RA, RV) in R^{2 x SR x NFFT}
   Xtilde  = (Xbar - min(Xbar)) / (max(Xbar) - min(Xbar))
 
-Differences from the TII pipeline in ../preprocessing/preprocess_radar.py:
-  * no static clutter removal -- TII subtracts the per-antenna chirp mean before
-    the angle FFT, AMBER eq. (5) has no such term;
-  * a genuine 2D FFT rather than two successive 1D FFTs;
-  * one 2-channel file with a joint normalisation, instead of two separate
-    files each normalised on its own.
+Three details that are easy to get wrong:
+  * no static clutter removal -- eq. (5) has no mean-subtraction term, unlike
+    the common DeepSense6G radar recipe that subtracts the per-antenna chirp
+    mean before the angle FFT;
+  * a genuine 2D FFT, not two successive 1D FFTs;
+  * ONE 2-channel file under a joint normalisation, not two separately
+    normalised maps -- so only one of the two channels reaches 1.0.
 
-Output: data/processed_amber/<split>/<scenario>/radar_ra_rv/radar_data_<f>.npy
+Output: data/processed_amber/<source>/<scenario>/radar_ra_rv/radar_data_<f>.npy
         (2, 256, NFFT) float32 in [0, 1]
 
-Run:  python preprocessing_amber/radar_ra_rv.py --split all
+Run:  python preprocessing_amber/radar_ra_rv.py --source all
 """
 import argparse
 import sys
@@ -71,32 +72,37 @@ def _process(src, dst_dir, nfft, overwrite):
     return "done"
 
 
-def run(split, scenario, nfft, n_jobs, overwrite):
-    src_dir = config.raw_dir(split, scenario, "radar_data")
+def run(source, scenario, nfft, n_jobs, overwrite):
+    src_dir = config.raw_dir(source, scenario, "radar_data")
     if not src_dir.is_dir() or not any(src_dir.glob("*.npy")):
-        print(f"[{split}/{scenario}] no radar_data -- SKIPPED")
+        print(f"[{source}/{scenario}] no radar_data -- SKIPPED")
         return
-    dst_dir = config.radar_out(split, scenario)
+    dst_dir = config.radar_out(source, scenario)
     dst_dir.mkdir(parents=True, exist_ok=True)
     files = sorted(src_dir.glob("*.npy"))
     res = Parallel(n_jobs=n_jobs)(
         delayed(_process)(f, dst_dir, nfft, overwrite)
-        for f in tqdm(files, desc=f"radar(AMBER) {split}/{scenario}", unit="frm"))
-    print(f"[{split}/{scenario}] {res.count('done')} written, {res.count('skip')} present "
+        for f in tqdm(files, desc=f"radar(AMBER) {source}/{scenario}", unit="frm"))
+    print(f"[{source}/{scenario}] {res.count('done')} written, {res.count('skip')} present "
           f"-> {dst_dir}")
 
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--split", choices=list(config.SPLITS) + ["all"], default="all")
+    ap.add_argument("--source", choices=list(config.SOURCES) + ["all"], default="all",
+                    help="which DeepSense6G release on disk to process")
     ap.add_argument("--scenario", default="all")
     ap.add_argument("--nfft", type=int, default=config.RADAR_NFFT)
     ap.add_argument("--n-jobs", type=int, default=-1)
     ap.add_argument("--overwrite", action="store_true")
     a = ap.parse_args()
-    for split in (list(config.SPLITS) if a.split == "all" else [a.split]):
-        for scn in (config.SPLIT_SCENARIOS[split] if a.scenario == "all" else [a.scenario]):
-            run(split, scn, a.nfft, a.n_jobs, a.overwrite)
+    sources = config.available_sources() if a.source == "all" else [a.source]
+    for source in sources:
+        if config.source_csv(source) is None:
+            print(f"[{source}] not present in data/raw -- SKIPPED")
+            continue
+        for scn in (config.source_scenarios(source) if a.scenario == "all" else [a.scenario]):
+            run(source, scn, a.nfft, a.n_jobs, a.overwrite)
 
 
 if __name__ == "__main__":

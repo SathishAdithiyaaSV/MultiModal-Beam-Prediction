@@ -1,4 +1,4 @@
-"""Build the AMBER-style sample index for DeepSense6G scenarios 31-34.
+"""Build the AMBER sample index for DeepSense6G scenarios 31-34.
 
 One row per sample, matching AMBER's input specification (Sec. II-B):
 
@@ -8,26 +8,41 @@ One row per sample, matching AMBER's input specification (Sec. II-B):
   beam history            W-1 = 4 indices,    tau = t-W+1 .. t-1   (eq. 13)
   target                  optimal beam at t = argmax of the 64-beam power vector
 
-and AMBER's 5-element modality-availability vector m = [mI, mL, mR, mB, mG]
+plus AMBER's 5-element modality-availability vector m = [mI, mL, mR, mB, mG]
 (eq. 3), computed from what is actually on disk. AMBER is built to train and
 infer under arbitrary missing modalities, so samples are NOT dropped for having
 an unavailable modality; the mask records it.
 
-Beam history is legitimate side information, not label leakage: it uses only
-tau <= t-1, while the target is at t. It is derived from the per-frame
-mmWave_power_<f>.txt files, which exist independently of the csv's single
-`unit1_pwr_60ghz` column.
+SOURCE vs SPLIT
+---------------
+`source` is the physical DeepSense6G release a row came from; `split` is what
+the row may be used for. They are separate columns so that no name means two
+things:
 
-GPS min-max normalisation (eq. 12) is fit on the TRAINING split only and the
-constants are written to gps_norm.json, so val/test are transformed with train
+  source 'development' -> split 'train' / 'val'   (80/20 over frame blocks)
+  source 'adaptation'  -> split 'adaptation'      held out whole
+  source 'test'        -> split 'test'            official release only
+
+Nothing derived from the development set is ever called 'test'. Until
+data/raw/test/ exists the 'test' split is empty; dropping the official release
+in and re-running this script populates it and changes nothing else.
+
+The official test release ships without labels. Rows whose power vector or
+`unit1_beam` column is absent get `beam = -1` and are still indexed, so the
+modality tensors remain addressable for inference.
+
+Beam history is legitimate side information, not label leakage: it uses only
+tau <= t-1, while the target is at t.
+
+GPS min-max normalisation (eq. 12) is fit on the TRAIN split only; the constants
+go to gps_norm.json so val/adaptation/test are transformed with train
 statistics rather than their own.
 
 Outputs in data/processed_amber/index/:
-  samples.csv     one row per sample: paths, GPS metres, beam history, target,
-                  availability mask, split
-  beam_pwr.npy    (N, 64) float32 target power vectors
-  gps_norm.json   train-fit min/max for the GPS Cartesian coordinates
-  meta.json       provenance, AMBER hyperparameters, paper-unspecified choices
+  samples.csv     one row per sample
+  beam_pwr.npy    (N, 64) float32 target power vectors, NaN where unavailable
+  gps_norm.json   train-fit min/max for the GPS Cartesian columns
+  split_summary.csv / meta.json
 
 Run:  python preprocessing_amber/build_index.py
 """
@@ -59,8 +74,8 @@ def frame_of(p):
 def latlon_to_xy(lat, lon, lat0, lon0):
     """Local equirectangular projection to metres relative to (lat0, lon0).
 
-    Over the <100 m extent of a DeepSense6G scene this is accurate to well under
-    a centimetre, and unlike UTM it needs no zone bookkeeping.
+    Over the <100 m extent of a DeepSense6G scene this is accurate to well
+    under a centimetre, and unlike UTM it needs no zone bookkeeping.
     """
     phi = np.deg2rad(lat0)
     m_lat = 111132.92 - 559.82 * np.cos(2 * phi) + 1.175 * np.cos(4 * phi)
@@ -79,49 +94,55 @@ def beam_from_power(path):
     return int(np.nanargmax(np.where(finite, v, -np.inf))), int((~finite).sum())
 
 
-def collect(split):
-    root, csv = config.SPLITS[split]
+def collect(source):
+    """Read a source's official csv and attach identity columns."""
+    csv = config.source_csv(source)
+    root = config.SOURCES[source]
     df = pd.read_csv(csv)
+    missing = [c for c in RGB + RADAR + LIDAR + ["unit1_loc"] + LOC2 if c not in df.columns]
+    if missing:
+        raise ValueError(f"{csv}: missing expected column(s) {missing}")
     df["scenario"] = df["unit1_rgb_1"].str.extract(r"(scenario\d+)")
-    df["split_src"] = split
-    df["frame"] = df["unit1_rgb_1"].map(frame_of)
-    df["sample_id"] = split + "/" + df["scenario"] + "/" + df["frame"].astype(str)
-    return root, df
+    df["source"] = source
+    df["frame"] = df["unit1_rgb_1"].map(frame_of)                 # observation 1
+    df["frame_target"] = df["unit1_rgb_5"].map(frame_of)          # instant t
+    df["sample_id"] = source + "/" + df["scenario"] + "/" + df["frame_target"].astype(str)
+    return root, df, csv
 
 
-def build(split, rows, root):
+def build(source, rows, root):
     rel = lambda p: str(Path(p).relative_to(config.ROOT))
     out = {}
 
-    # ---- per-observation modality paths (processed for radar/lidar/image)
-    avail_img = np.ones(len(rows), bool)
-    avail_lid = np.ones(len(rows), bool)
-    avail_rad = np.ones(len(rows), bool)
+    # ---- per-observation modality paths (processed tensors)
+    avail = {"image": np.ones(len(rows), bool),
+             "lidar": np.ones(len(rows), bool),
+             "radar": np.ones(len(rows), bool)}
     for i in range(1, W + 1):
-        img = [config.image_out(split, s) / Path(p).name
+        img = [config.image_out(source, s) / Path(p).name
                for s, p in zip(rows["scenario"], rows[RGB[i - 1]])]
-        lid = [config.bev_out(split, s) / (Path(p).stem + ".npy")
+        lid = [config.bev_out(source, s) / (Path(p).stem + ".npy")
                for s, p in zip(rows["scenario"], rows[LIDAR[i - 1]])]
-        rad = [config.radar_out(split, s) / Path(p).name
+        rad = [config.radar_out(source, s) / Path(p).name
                for s, p in zip(rows["scenario"], rows[RADAR[i - 1]])]
         out[f"image_{i}"] = [rel(p) for p in img]
         out[f"lidar_bev_{i}"] = [rel(p) for p in lid]
         out[f"radar_{i}"] = [rel(p) for p in rad]
-        avail_img &= np.array([p.exists() for p in img])
-        avail_lid &= np.array([p.exists() for p in lid])
-        avail_rad &= np.array([p.exists() for p in rad])
+        avail["image"] &= np.array([p.exists() for p in img])
+        avail["lidar"] &= np.array([p.exists() for p in lid])
+        avail["radar"] &= np.array([p.exists() for p in rad])
 
     # ---- GPS -> Cartesian metres relative to the BS (AMBER eq. 12)
     bs = {}
     for s, p in zip(rows["scenario"], rows["unit1_loc"]):
         if s not in bs:
-            bs[s] = np.loadtxt(root / p)
+            bs[s] = np.loadtxt(root / p) if (root / p).exists() else np.array([np.nan] * 2)
     avail_gps = np.ones(len(rows), bool)
     for k, col in enumerate(LOC2, start=1):
         xs, ys, ok = [], [], []
         for s, p in zip(rows["scenario"], rows[col]):
             f = root / p
-            if not f.exists():
+            if not f.exists() or not np.isfinite(bs[s]).all():
                 xs.append(np.nan); ys.append(np.nan); ok.append(False); continue
             lat, lon = np.loadtxt(f)
             x, y = latlon_to_xy(lat, lon, bs[s][0], bs[s][1])
@@ -134,33 +155,34 @@ def build(split, rows, root):
     # ---- beam history: observations 1..W-1, i.e. tau = t-W+1 .. t-1
     avail_beam = np.ones(len(rows), bool)
     for i in range(1, W):
-        idx, nan = [], []
+        idx = []
         for s, p in zip(rows["scenario"], rows[LIDAR[i - 1]]):
-            f = config.raw_dir(split, s, "mmWave_data") / f"mmWave_power_{frame_of(p)}.txt"
-            b, n = beam_from_power(f)
-            idx.append(b); nan.append(n)
+            f = config.raw_dir(source, s, "mmWave_data") / f"mmWave_power_{frame_of(p)}.txt"
+            idx.append(beam_from_power(f)[0])
         out[f"beam_hist_{i}"] = idx
         avail_beam &= np.array(idx) >= 0
     out["n_beam_hist_available"] = sum(
         (np.array(out[f"beam_hist_{i}"]) >= 0).astype(int) for i in range(1, W))
 
-    # ---- target: beam at t from the csv's power vector
-    # per-row: a scenario missing its power files must not poison the rest
-    pwr = np.stack([
-        np.loadtxt(root / p) if (root / p).exists() else np.full(config.N_BEAMS, np.nan)
-        for p in rows["unit1_pwr_60ghz"]
-    ]).astype(np.float32)
+    # ---- target at t. Absent for the unlabelled official test release.
+    if "unit1_pwr_60ghz" in rows.columns:
+        pwr = np.stack([
+            np.loadtxt(root / p) if (root / p).exists() else np.full(config.N_BEAMS, np.nan)
+            for p in rows["unit1_pwr_60ghz"]
+        ]).astype(np.float32)
+    else:
+        pwr = np.full((len(rows), config.N_BEAMS), np.nan, np.float32)
     n_nan = (~np.isfinite(pwr)).sum(axis=1)
-    beam = np.where(n_nan < config.N_BEAMS,
-                    np.nanargmax(np.where(np.isfinite(pwr), pwr, -np.inf), axis=1), -1)
-    out["beam"] = beam
-    out["beam_official"] = rows["unit1_beam"].to_numpy() - 1
+    out["beam"] = np.where(n_nan < config.N_BEAMS,
+                           np.nanargmax(np.where(np.isfinite(pwr), pwr, -np.inf), axis=1), -1)
+    out["beam_official"] = (rows["unit1_beam"].to_numpy() - 1
+                            if "unit1_beam" in rows.columns else -1)
     out["pwr_n_nan"] = n_nan
 
     # ---- AMBER availability vector m = [mI, mL, mR, mB, mG]  (eq. 3)
-    out["m_image"] = avail_img.astype(int)
-    out["m_lidar"] = avail_lid.astype(int)
-    out["m_radar"] = avail_rad.astype(int)
+    out["m_image"] = avail["image"].astype(int)
+    out["m_lidar"] = avail["lidar"].astype(int)
+    out["m_radar"] = avail["radar"].astype(int)
     out["m_beam"] = avail_beam.astype(int)
     out["m_gps"] = avail_gps.astype(int)
 
@@ -181,63 +203,81 @@ def sessions(frames, gap):
 
 
 def assign_splits(rows, mode, train_frac, block, seed, gap):
+    """source -> split, per the policy in config.py."""
     rng = np.random.default_rng(seed)
-    rows["split"] = "adaptation"
-    # no usable target -> cannot train or evaluate on it
-    rows.loc[rows["pwr_n_nan"] == config.N_BEAMS, "split"] = "no_target"
-    # partially-NaN power vector: official label is the first-NaN index (see
-    # ../README.md section 7.2), so the label is not a real beam
-    rows.loc[(rows["pwr_n_nan"] > 0) & (rows["pwr_n_nan"] < config.N_BEAMS),
-             "split"] = "excluded_nan_pwr"
-    rows.loc[rows["beam"] < 0, "split"] = "no_target"
-    dev = (rows["split_src"] == "development") & (rows["split"] == "adaptation")
-    rows.loc[(rows["split_src"] == "development") & ~dev & (rows["split"] == "adaptation"),
-             "split"] = "no_target"
 
+    # held-out sources keep their own name; nothing derived from development
+    # is ever called 'test'
+    rows["split"] = rows["source"].map(
+        {"development": "train", "adaptation": "adaptation", "test": "test"})
+
+    # rows with no usable target cannot be fit or scored on. The official test
+    # release is legitimately unlabelled, so it is exempt.
+    labelled_source = rows["source"] != "test"
+    rows.loc[labelled_source & (rows["pwr_n_nan"] == config.N_BEAMS), "split"] = "no_target"
+    rows.loc[labelled_source & (rows["beam"] < 0), "split"] = "no_target"
+    # partially-NaN power vector: the official unit1_beam is the first-NaN index,
+    # so the label is not a real beam (see README)
+    rows.loc[labelled_source & (rows["pwr_n_nan"] > 0)
+             & (rows["pwr_n_nan"] < config.N_BEAMS), "split"] = "excluded_nan_pwr"
+
+    # development -> train / val
+    dev = (rows["source"] == "development") & (rows["split"] == "train")
     for scn in sorted(rows.loc[dev, "scenario"].unique()):
         m = dev & (rows["scenario"] == scn)
         idx = rows.index[m].to_numpy()
-        fr = rows.loc[m, "frame"].to_numpy()
+        fr = rows.loc[m, "frame_target"].to_numpy()
         if mode == "random":
-            # faithful to the paper's wording, but consecutive DeepSense6G frames
-            # overlap in time, so this leaks the test set into training
-            perm = rng.permutation(len(idx))
-            cut = int(round(train_frac * len(idx)))
-            rows.loc[idx[perm[:cut]], "split"] = "train"
-            rows.loc[idx[perm[cut:]], "split"] = "test"
-            continue
-        if mode == "session":
-            groups = [idx[sessions(fr, gap) == s] for s in np.unique(sessions(fr, gap))]
+            # faithful to AMBER's wording, but consecutive DeepSense6G frames
+            # overlap in time, so this leaks val into train
+            groups = [np.array([i]) for i in idx]
+        elif mode == "session":
+            lab = sessions(fr, gap)
+            groups = [idx[lab == s] for s in np.unique(lab)]
         else:  # block
             o = np.argsort(fr, kind="stable")
             groups = [idx[o][i:i + block] for i in range(0, len(idx), block)]
         order = rng.permutation(len(groups))
         n_tr = int(round(train_frac * len(groups)))
         for rank, gi in enumerate(order):
-            rows.loc[groups[gi], "split"] = "train" if rank < n_tr else "test"
+            rows.loc[groups[gi], "split"] = "train" if rank < n_tr else "val"
     return rows
 
 
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--split-mode", choices=["block", "session", "random"], default="block",
-                    help="block: contiguous 50-frame blocks (default, leakage-controlled); "
+                    help="how the development source is divided into train/val. "
+                         "block: contiguous 50-frame blocks (default, leakage-controlled); "
                          "session: whole recording sessions; "
-                         "random: per-sample, matches the paper's wording but leaks")
+                         "random: per-sample, matches AMBER's wording but leaks")
     ap.add_argument("--train-frac", type=float, default=config.TRAIN_FRAC)
     ap.add_argument("--block", type=int, default=config.SPLIT_BLOCK)
     ap.add_argument("--session-gap", type=int, default=config.SESSION_GAP)
     ap.add_argument("--seed", type=int, default=config.SPLIT_SEED)
     a = ap.parse_args()
 
-    frames, pwrs = [], []
-    for split in config.SPLITS:
-        root, rows = collect(split)
-        print(f"[{split}] {len(rows)} csv rows")
-        feats, pwr = build(split, rows, root)
-        merged = pd.concat([rows[["sample_id", "split_src", "scenario", "frame"]], feats], axis=1)
+    sources = config.available_sources()
+    print(f"sources found in {config.RAW}: {', '.join(sources)}")
+    for s in config.SOURCES:
+        if s not in sources:
+            print(f"  ({s} not present -- the '{s}' split will be empty)")
+
+    frames, pwrs, prov = [], [], {}
+    for source in sources:
+        root, rows, csv = collect(source)
+        print(f"\n[{source}] {len(rows)} rows from {csv.name}"
+              f"  scenarios: {', '.join(sorted(rows.scenario.unique()))}")
+        labelled = "unit1_pwr_60ghz" in rows.columns
+        if not labelled:
+            print("   no power-vector column -> treated as UNLABELLED (inference only)")
+        feats, pwr = build(source, rows, root)
+        keep = ["sample_id", "source", "scenario", "frame", "frame_target"]
+        merged = pd.concat([rows[keep], feats], axis=1)
         frames.append(merged)
         pwrs.append(pwr)
+        prov[source] = {"csv": csv.name, "rows": int(len(rows)), "labelled": labelled,
+                        "scenarios": sorted(rows.scenario.unique())}
         for name, col in [("image", "m_image"), ("lidar", "m_lidar"), ("radar", "m_radar"),
                           ("beam-hist", "m_beam"), ("gps", "m_gps")]:
             print(f"   available {name:<10} {int(merged[col].sum()):>5}/{len(merged)}")
@@ -247,7 +287,7 @@ def main():
     rows["pwr_row"] = np.arange(len(rows))
     rows = assign_splits(rows, a.split_mode, a.train_frac, a.block, a.seed, a.session_gap)
 
-    # ---- GPS min-max fit on the training split only (AMBER eq. 12)
+    # ---- GPS min-max fit on the TRAIN split only (AMBER eq. 12)
     tr = rows["split"] == "train"
     cols = ["ue_x_1", "ue_y_1", "ue_x_2", "ue_y_2"]
     gps_norm = {c: {"min": float(np.nanmin(rows.loc[tr, c])),
@@ -258,10 +298,11 @@ def main():
     np.save(config.INDEX_DIR / "beam_pwr.npy", pwr)
     (config.INDEX_DIR / "gps_norm.json").write_text(json.dumps(
         {"fit_on": "split == 'train'", "columns": gps_norm,
-         "apply": "(v - min) / (max - min), clipped to [0,1] for unseen extremes"}, indent=2))
+         "apply": "(v - min) / (max - min), clip to [0,1] for unseen extremes"}, indent=2))
     (config.INDEX_DIR / "meta.json").write_text(json.dumps({
-        "pipeline": "AMBER-style preprocessing (Wen et al.), DeepSense6G scenarios 31-34",
+        "pipeline": "AMBER (Wen et al.) preprocessing, DeepSense6G scenarios 31-34",
         "n_samples": int(len(rows)),
+        "sources": prov,
         "amber_params": {"K_beams": config.N_BEAMS, "W": W, "n_gps": config.N_GPS,
                          "n_beam_history": config.N_BEAM_HISTORY},
         "paper_unspecified_choices": {
@@ -272,21 +313,31 @@ def main():
             "bev_max_per_cell": config.BEV_MAX_PER_CELL,
             "image_size": list(config.IMAGE_SIZE),
         },
-        "split": {"mode": a.split_mode, "train_frac": a.train_frac, "block": a.block,
-                  "session_gap": a.session_gap, "seed": a.seed,
-                  "adaptation": "held out whole, never split"},
+        "split_policy": {
+            "train_val_from": "development",
+            "mode": a.split_mode, "train_frac": a.train_frac, "block": a.block,
+            "session_gap": a.session_gap, "seed": a.seed,
+            "adaptation": "official adaptation release, held out whole",
+            "test": "official challenge test release only; empty if absent",
+        },
         "beam_history": "derived from per-frame mmWave_power files at tau <= t-1 only",
+        "split_counts": rows["split"].value_counts().to_dict(),
     }, indent=2))
 
-    summary = (rows.groupby(["split", "scenario"])
+    summary = (rows.groupby(["split", "source", "scenario"])
                    .agg(n=("sample_id", "size"),
                         m_image=("m_image", "mean"), m_lidar=("m_lidar", "mean"),
                         m_radar=("m_radar", "mean"), m_beam=("m_beam", "mean"),
                         m_gps=("m_gps", "mean")).round(3).reset_index())
     summary.to_csv(config.INDEX_DIR / "split_summary.csv", index=False)
+
     print(f"\n{summary.to_string(index=False)}")
-    print(f"\nwrote {config.INDEX_DIR}/samples.csv ({len(rows)} rows, {len(rows.columns)} cols)")
-    print(f"wrote {config.INDEX_DIR}/beam_pwr.npy {pwr.shape}, gps_norm.json, meta.json")
+    usable = rows[~rows["split"].isin(config.UNUSABLE_SPLITS)]
+    print(f"\nusable samples: {len(usable)}   "
+          + "  ".join(f"{k}={v}" for k, v in usable['split'].value_counts().items()))
+    print(f"wrote {config.INDEX_DIR}/samples.csv ({len(rows)} rows, {len(rows.columns)} cols)")
+    print(f"wrote {config.INDEX_DIR}/beam_pwr.npy {pwr.shape}, gps_norm.json, "
+          f"split_summary.csv, meta.json")
 
 
 if __name__ == "__main__":

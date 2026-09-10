@@ -1,9 +1,10 @@
-# Preprocessing dependencies for DeepSense6G scenarios 31-34.
-# Verified on macOS/arm64 with CPython 3.14. Open3D and torchvision -- used by
-# the original TII scripts in preprocessing/original_tii/ -- are deliberately
-# NOT required: preprocessing/ply_io.py and preprocessing/augment_image.py
-# provide the handful of calls they were used for. torch is only needed later,
-# for the baselines, not for preprocessing.
+# Preprocessing dependencies for the AMBER pipeline (DeepSense6G scenarios 31-34).
+# Verified on macOS/arm64 with CPython 3.14.
+#
+# Open3D is deliberately NOT required: it publishes no wheels for Python 3.14,
+# and preprocessing_amber/ply_io.py provides the two calls it was used for.
+# torchvision is not required either -- AMBER applies no photometric
+# augmentation. torch is needed only later, for training, not for preprocessing.
 numpy>=2.0
 scipy>=1.13
 pandas>=2.2

@@ -3,15 +3,15 @@
 Implements the representations described in
   "AMBER: An Adaptive Multimodal Mask Transformer for Beam Prediction with
    Missing Modalities" (Wen, Shi, Li, Zhao, Zhao, Wang)
-which differ substantially from the TII challenge pipeline in ../preprocessing:
+Representations produced:
 
   radar  2D-FFT range-angle + range-velocity maps stacked as TWO CHANNELS of a
          single tensor with ONE joint min-max normalisation, and NO static
-         clutter removal          (AMBER eqs. 5-8)
-  lidar  bird's-eye-view point-count histogram, capped at 5 points per cell,
-         instead of KD-tree background subtraction      (AMBER eq. 11)
+         clutter removal                                  (AMBER eqs. 5-8)
+  lidar  bird's-eye-view point-count histogram, capped at 5 points per cell
+                                                          (AMBER eq. 11)
   gps    lat/lon converted to Cartesian metres relative to the BS, then
-         min-max normalised                              (AMBER eq. 12)
+         min-max normalised                               (AMBER eq. 12)
   beam   the W-1 historical beam indices are an INPUT modality  (AMBER eq. 13)
   image  per-image mean/std standardisation, no photometric augmentation
                                                           (AMBER eq. 10)
@@ -20,24 +20,60 @@ Values the paper does not state numerically are marked PAPER-UNSPECIFIED below;
 each is a documented choice of ours, exposed as a CLI flag.
 """
 from pathlib import Path
-import sys
 
 ROOT = Path(__file__).resolve().parent.parent
 RAW = ROOT / "data" / "raw"
 PROCESSED = ROOT / "data" / "processed_amber"
 INDEX_DIR = PROCESSED / "index"
 
-# ply_io lives in the sibling TII pipeline; reuse it rather than duplicating it
-sys.path.insert(0, str(ROOT / "preprocessing"))
+# ---------------------------------------------------------------- data sources
+# A "source" is a physical DeepSense6G release on disk. It is NOT the same thing
+# as a train/val/test "split" -- see SPLIT POLICY below. Sources are discovered
+# at run time, so the pipeline works before and after the official test set is
+# added.
+SOURCES = {
+    "development": RAW / "development",
+    "adaptation": RAW / "adaptation",
+    "test": RAW / "test",
+}
 
-SPLITS = {
-    "development": (RAW / "development", RAW / "development" / "ml_challenge_dev_multi_modal.csv"),
-    "adaptation": (RAW / "adaptation", RAW / "adaptation" / "ml_challenge_data_adaptation_multi_modal.csv"),
+# The official index csv inside each source. The test release has shipped under
+# a few different names, so several are accepted.
+SOURCE_CSV_NAMES = {
+    "development": ["ml_challenge_dev_multi_modal.csv"],
+    "adaptation": ["ml_challenge_data_adaptation_multi_modal.csv"],
+    "test": ["ml_challenge_test_multi_modal.csv",
+             "ml_challenge_data_test_multi_modal.csv",
+             "ml_challenge_challenge_multi_modal.csv"],
 }
-SPLIT_SCENARIOS = {
-    "development": ["scenario32", "scenario33", "scenario34"],
-    "adaptation": ["scenario31", "scenario32", "scenario33"],
-}
+
+
+def source_csv(source):
+    """Path to a source's index csv, or None if the source is not present."""
+    root = SOURCES[source]
+    if not root.is_dir():
+        return None
+    for name in SOURCE_CSV_NAMES[source]:
+        if (root / name).exists():
+            return root / name
+    found = sorted(root.glob("*.csv"))
+    return found[0] if found else None
+
+
+def available_sources():
+    """Sources that are actually on disk, in a deterministic order."""
+    return [s for s in SOURCES if source_csv(s) is not None]
+
+
+def source_scenarios(source):
+    """Scenario directories present in a source, discovered from disk."""
+    root = SOURCES[source]
+    if not root.is_dir():
+        return []
+    return sorted(d.name for d in root.iterdir()
+                  if d.is_dir() and d.name in SCENARIOS)
+
+
 SCENARIOS = ["scenario31", "scenario32", "scenario33", "scenario34"]
 
 # ---------------------------------------------------------------- AMBER Table II
@@ -70,27 +106,49 @@ BEV_MAX_PER_CELL = 5           # "the maximum number of points per grid cell is
 # Set --image-size 0 to skip the cache and read the raw frames instead.
 IMAGE_SIZE = (256, 256)        # (W, H)
 
-# ---------------------------------------------------------------- splits
-# AMBER: "the dataset is randomly divided into 80% training and 20% testing
-# subsets, each corresponding to an independent vehicle pass-by event".
-TRAIN_FRAC = 0.8
+# ---------------------------------------------------------------- SPLIT POLICY
+# Data SOURCE (a release on disk) and evaluation SPLIT (what a sample is used
+# for) are kept strictly separate, so that no split name ever means two things:
+#
+#   source 'development' -> split 'train'  (fit parameters)
+#                        -> split 'val'    (model selection, early stopping)
+#   source 'adaptation'  -> split 'adaptation'
+#                           the official 100-sample labelled set. Held out
+#                           whole; a secondary in-domain generalisation check,
+#                           never trained on and never used for selection.
+#   source 'test'        -> split 'test'
+#                           RESERVED for the official challenge test release.
+#                           Nothing else is ever labelled 'test', so any number
+#                           reported on 'test' is on official held-out data.
+#
+# Until data/raw/test/ exists the 'test' split is simply empty; adding the
+# release and re-running build_index.py populates it with no other changes.
+#
+# AMBER states an 80/20 division, which is applied here as train/val over the
+# development source.
+TRAIN_FRAC = 0.8               # of the development source; remainder -> val
 SPLIT_BLOCK = 50               # contiguous frames per block in 'block' mode
 SPLIT_SEED = 2022
 # A frame-index gap larger than this starts a new recording session
 SESSION_GAP = 10
 
-
-def radar_out(split, scenario):
-    return PROCESSED / split / scenario / "radar_ra_rv"
-
-
-def bev_out(split, scenario):
-    return PROCESSED / split / scenario / "lidar_bev"
+# Splits that must never be trained or selected on.
+HELD_OUT_SPLITS = ("adaptation", "test")
+# Splits carrying no usable target.
+UNUSABLE_SPLITS = ("no_target", "excluded_nan_pwr")
 
 
-def image_out(split, scenario):
-    return PROCESSED / split / scenario / "camera"
+def radar_out(source, scenario):
+    return PROCESSED / source / scenario / "radar_ra_rv"
 
 
-def raw_dir(split, scenario, modality, unit="unit1"):
-    return SPLITS[split][0] / scenario / unit / modality
+def bev_out(source, scenario):
+    return PROCESSED / source / scenario / "lidar_bev"
+
+
+def image_out(source, scenario):
+    return PROCESSED / source / scenario / "camera"
+
+
+def raw_dir(source, scenario, modality, unit="unit1"):
+    return SOURCES[source] / scenario / unit / modality

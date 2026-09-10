@@ -4,21 +4,19 @@ Implements AMBER eq. (11). The raw point cloud XL[t] in R^{NL x 3} is projected
 onto a Vg x Hg BEV grid to form a histogram X^H_L[t], with the point count per
 cell capped at five "to reduce outlier effects", then normalised.
 
-This is a completely different representation from the TII pipeline in
-../preprocessing/preprocess_lidar.py, which estimates a static background per
-scenario and subtracts it with a KD-tree, emitting filtered .ply point clouds.
-AMBER keeps every point and discards only the vertical structure, so no
-background model and no per-scenario min-points threshold are involved.
+Note that AMBER keeps every point and discards only the vertical structure:
+there is no background model and no per-scenario point-count threshold, unlike
+the background-subtraction recipe used elsewhere on DeepSense6G LiDAR.
 
 Normalisation: the cap of 5 makes the histogram's range known a priori, so
 cells are divided by BEV_MAX_PER_CELL. This keeps the mapping from point count
 to pixel value identical across every frame and scenario -- a per-frame min-max
 would rescale each frame by its own densest cell and destroy that comparability.
 
-Output: data/processed_amber/<split>/<scenario>/lidar_bev/lidar_data_<f>.npy
+Output: data/processed_amber/<source>/<scenario>/lidar_bev/lidar_data_<f>.npy
         (1, Vg, Hg) float32 in [0, 1]
 
-Run:  python preprocessing_amber/lidar_bev.py --split all
+Run:  python preprocessing_amber/lidar_bev.py --source all
 """
 import argparse
 import sys
@@ -60,19 +58,19 @@ def _process(src, dst_dir, kwargs, overwrite):
     return "done"
 
 
-def run(split, scenario, kwargs, n_jobs, overwrite):
-    src_dir = config.raw_dir(split, scenario, "lidar_data")
+def run(source, scenario, kwargs, n_jobs, overwrite):
+    src_dir = config.raw_dir(source, scenario, "lidar_data")
     if not src_dir.is_dir() or not any(src_dir.glob("*.ply")):
-        print(f"[{split}/{scenario}] no lidar_data -- SKIPPED")
+        print(f"[{source}/{scenario}] no lidar_data -- SKIPPED")
         return
-    dst_dir = config.bev_out(split, scenario)
+    dst_dir = config.bev_out(source, scenario)
     dst_dir.mkdir(parents=True, exist_ok=True)
     files = sorted(src_dir.glob("*.ply"))
     res = Parallel(n_jobs=n_jobs)(
         delayed(_process)(f, dst_dir, kwargs, overwrite)
-        for f in tqdm(files, desc=f"bev {split}/{scenario}", unit="frm"))
+        for f in tqdm(files, desc=f"bev {source}/{scenario}", unit="frm"))
     corrupt = [r for r in res if r.startswith("corrupt:")]
-    print(f"[{split}/{scenario}] {res.count('done')} written, {res.count('skip')} present, "
+    print(f"[{source}/{scenario}] {res.count('done')} written, {res.count('skip')} present, "
           f"{len(corrupt)} unreadable -> {dst_dir}")
     for c in corrupt:
         print(f"   CORRUPT {c.split(':', 2)[1]} -- re-download this file")
@@ -80,7 +78,8 @@ def run(split, scenario, kwargs, n_jobs, overwrite):
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--split", choices=list(config.SPLITS) + ["all"], default="all")
+    ap.add_argument("--source", choices=list(config.SOURCES) + ["all"], default="all",
+                    help="which DeepSense6G release on disk to process")
     ap.add_argument("--scenario", default="all")
     ap.add_argument("--grid", type=int, nargs=2, default=list(config.BEV_GRID),
                     metavar=("VG", "HG"))
@@ -95,9 +94,13 @@ def main():
     kwargs = dict(grid=tuple(a.grid), x_range=tuple(a.x_range), y_range=tuple(a.y_range),
                   z_range=tuple(a.z_range) if a.z_range else None,
                   max_per_cell=a.max_per_cell)
-    for split in (list(config.SPLITS) if a.split == "all" else [a.split]):
-        for scn in (config.SPLIT_SCENARIOS[split] if a.scenario == "all" else [a.scenario]):
-            run(split, scn, kwargs, a.n_jobs, a.overwrite)
+    sources = config.available_sources() if a.source == "all" else [a.source]
+    for source in sources:
+        if config.source_csv(source) is None:
+            print(f"[{source}] not present in data/raw -- SKIPPED")
+            continue
+        for scn in (config.source_scenarios(source) if a.scenario == "all" else [a.scenario]):
+            run(source, scn, kwargs, a.n_jobs, a.overwrite)
 
 
 if __name__ == "__main__":

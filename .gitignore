@@ -1,8 +1,6 @@
-# Dataset: ~25 GB raw + ~5 GB derived. Fetch raw from DeepSense6G, regenerate
-# derived with preprocessing/run_preprocessing.sh
-data/raw/
-data/processed/
-data/processed_amber/
+# Dataset: ~25 GB raw + ~6 GB derived. Fetch raw releases from DeepSense6G,
+# regenerate derived with preprocessing_amber/run_preprocessing.sh
+data/
 
 # Reference papers are kept locally but not redistributed (see references/README.md)
 references/*.pdf

@@ -1,7 +1,7 @@
 """Minimal PLY point-cloud reader/writer, used in place of Open3D.
 
 Open3D publishes no wheels for the Python version available on this machine
-(3.14), so the two Open3D calls the TII LiDAR scripts rely on --
+(3.14), so the two calls needed to read DeepSense6G point clouds --
 `read_point_cloud` / `write_point_cloud(..., write_ascii=True)` -- are provided
 here on top of numpy.
 
