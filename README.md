@@ -12,6 +12,10 @@ Task: predict the best beam out of a **64-beam codebook** from 5 RGB frames,
 5 LiDAR sweeps, 5 radar cubes and the first 2 GPS positions. The target is the
 64-dim mmWave power vector; the optimal beam is its `argmax`.
 
+**New here?** Start with [OVERVIEW.md](OVERVIEW.md) — a high-level tour of the
+raw data, both preprocessing pipelines, the processed outputs, and what to show
+when presenting. This file is the detailed reference for the TII pipeline.
+
 > Scope discipline: the 2023 V2V dataset and all other DeepSense scenarios are
 > out of scope. `preprocessing/config.py` hardcodes scenarios 31–34 and nothing
 > reaches outside `data/raw/`.
