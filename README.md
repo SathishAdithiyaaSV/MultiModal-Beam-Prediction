@@ -1,7 +1,7 @@
-# Multimodal mmWave Beam Prediction — AMBER Preprocessing
+# Multimodal mmWave Beam Prediction — AMBER
 
-Preprocessing for the **DeepSense6G 2022 Multi-Modal Beam Prediction** dataset,
-restricted to **scenarios 31–34**, implementing the representations from
+Preprocessing **and model** for the **DeepSense6G 2022 Multi-Modal Beam
+Prediction** dataset, restricted to **scenarios 31–34**, implementing
 
 > **AMBER: An Adaptive Multimodal Mask Transformer for Beam Prediction with
 > Missing Modalities** — Wen, Shi, Li, Zhao, Zhao, Wang
@@ -51,6 +51,19 @@ instant.
 │   ├── image_cache.py            # resized frame cache + per-image statistics
 │   ├── build_index.py            # sequences, GPS, beam history, mask, splits
 │   └── run_preprocessing.sh      # end-to-end driver
+├── amber/                        # the model
+│   ├── config.py                 # hyperparameters; [Table II] vs [UNSPECIFIED]
+│   ├── encoders.py               # modality encoders, eqs. (9)-(13)
+│   ├── embeddings.py             # positional embeddings + weight indicator, (16)-(20)
+│   ├── transformer.py            # masked MSA / MCA blocks, (21)-(31)
+│   ├── cma.py                    # class-former alignment, (32)-(34)
+│   ├── model.py                  # assembly + prediction head
+│   ├── losses.py                 # focal w/ soft labels, (35)-(36)
+│   ├── metrics.py                # Top-K and DBA, (37)-(39)
+│   ├── dataset.py                # torch Dataset over the processed index
+│   └── train.py                  # training / evaluation entry point
+├── tests/test_amber.py           # 24 invariants checked against the paper
+├── pytest.ini
 └── references/                   # reference-paper index (PDFs are git-ignored)
 ```
 
@@ -382,8 +395,125 @@ routing has to clear.
 
 ---
 
-## 10. Next steps (not part of preprocessing)
+## 10. The model
 
-Official GPS-only LSTM baseline as a label/evaluation sanity check → AMBER on
-these tensors → modality ablations → the difficulty and marginal-utility
-analysis → only then the adaptive cost-aware gate.
+`amber/` implements the AMBER architecture. One module per concern, each
+docstring citing the equations it implements.
+
+### Architecture
+
+```
+ image (W,3,H,W)  ─ ResNet34 ─┐
+ lidar (W,1,H,W)  ─ ResNet18 ─┤  adaptive pool (VA,HA) → spatial flatten → MLP
+ radar (W,2,H,W)  ─ ResNet18 ─┤                                    eqs. (9)-(11)
+ beam  (W-1, 2)   ─ 3-layer MLP ┤                                  eq.  (13)
+ gps   (2, 2)     ─ 3-layer MLP ┘                                  eq.  (12)
+                                 │
+        + sinusoidal spatial / temporal embeddings          eqs. (16)-(17)
+        × modality-weight indicator  α = softmax(w/τ)       eqs. (18)-(19)
+                                 │
+   ┌─────────────────────────────▼──────────────────────────────┐
+   │ modality-specific block — masked self-attention            │
+   │ mask M[j,i] = 1 iff i == j  (block-diagonal)  eqs. (21)-(27)│
+   └─────────────────────────────┬──────────────────────────────┘
+                                 │ Zbar, Z'
+   ┌─────────────────────────────▼──────────────────────────────┐
+   │ modality-fusion block — masked cross-attention             │
+   │ learnable fusion token queries the available modalities    │
+   │ mask M[F,i] = 1 iff modality i available      eqs. (28)-(31)│
+   └──────────┬──────────────────────────────┬──────────────────┘
+              │ Zbar_F                       │ Z'_F
+     prediction head (64 logits)      CMA class-formers → contrastive
+        Sec. III-C                    loss, TRAINING ONLY  eqs. (32)-(34)
+```
+
+Token budget matches the paper exactly: with `VA = HA = 4`, each of image /
+lidar / radar contributes 16 tokens, beam 4 and GPS 2, so the sequence is 54
+long and `N = 2 × 54 = 108`, satisfying `N = 2(3·VA·HA + W + 1)`.
+
+Objective, eq. (36): `L = 10·L_focal + 0.2·L_contrastive + 0.2·L_2`, where the
+focal term uses **Gaussian soft labels** over the codebook — neighbouring beams
+point in neighbouring directions, so a near miss costs less than a distant one,
+which is also what DBA measures.
+
+**Missing modalities are handled in three places**, which is what makes the
+model robust to arbitrary availability patterns: the input tensor is zeroed, the
+eq. (30) fusion mask blocks attention to it, and it is excluded from both the
+contrastive average and the eq. (20) penalty.
+
+### Training
+
+```bash
+PY=~/.venvs/beamprep/bin/python
+
+# full run: AdamW, cosine schedule w/ 5 warm-up steps, 20 epochs   [Table II]
+$PY -m amber.train --name amber-full
+
+# quick smoke test on a handful of samples
+$PY -m amber.train --name smoke --epochs 2 --batch-size 4     --limit-train 32 --limit-eval 32 --no-pretrained
+
+# score an existing checkpoint
+$PY -m amber.train --eval-only --checkpoint runs/amber-full/best.pt
+```
+
+Results go to `runs/<name>/`: `config.json` (every hyperparameter, including the
+unspecified ones), `history.csv`, `metrics.json`, `best.pt`. Metrics are Top-1 /
+Top-3 / Top-5 and DBA, reported **overall and per scenario**.
+
+Model selection is on `val` Top-1 only. `adaptation` and `test` are scored but
+never selected on.
+
+Useful flags: `--pool` (VA = HA), `--temporal-pool {concat,mean,tokens}`,
+`--modality-dropout`, `--no-pretrained`, `--device {auto,cpu,cuda,mps}`,
+`--limit-train/--limit-eval`.
+
+### Tests
+
+```bash
+~/.venvs/beamprep/bin/python -m pytest -q          # 23 fast invariants
+~/.venvs/beamprep/bin/python -m pytest -q -m slow  # + the overfit check (~2 min)
+```
+
+The suite checks the paper's claims rather than just that the code runs: the
+token count equals `N`, the eq. (23) mask is strictly within-modality, the
+eq. (30) mask drops exactly the missing modalities, `alpha` is a distribution,
+the eq. (20) penalty ignores missing modalities, focal loss orders
+correct < near-miss < distant-miss, DBA equals its closed form for an off-by-one
+prediction, all 32 missing-modality patterns stay finite, the CMA is active in
+training and skipped at eval, and gradients reach every trainable parameter.
+
+The slow test confirms the model can drive 8 samples to 100 % Top-1 — the
+end-to-end check that the encoder → mask → fusion → head chain is wired
+correctly.
+
+---
+
+## 11. One ambiguity in the paper worth knowing about
+
+AMBER states two things about the temporal window that cannot both hold
+literally:
+
+- the first conv takes "two-channel radar input" and eq. (9) encodes a single
+  instant `XR[t]`, implying one forward pass per frame;
+- eq. (15) gives `ξ_I, ξ_L, ξ_R ∈ R^{VA·HA × C}` with no `W` factor, and
+  `N = 2(3·VA·HA + W + 1)` where the `W+1 = 6` accounts only for the beam (4)
+  and GPS (2) tokens.
+
+So the `W` per-frame feature maps must collapse into `VA·HA` tokens, but the
+paper never says how, and its temporal positional embedding is described only
+for the beam and GPS modalities.
+
+`--temporal-pool` selects the reconciliation. The default `concat` encodes each
+frame at the stated channel count, tiles the `W` feature maps along the width
+axis, then applies a single adaptive pool — keeping both stated facts true,
+preserving temporal structure, and yielding exactly `VA·HA` tokens. `mean`
+averages over time; `tokens` keeps `W·VA·HA` tokens but then `N` no longer
+matches the paper. Report which you used.
+
+---
+
+## 12. Next steps
+
+Official GPS-only LSTM baseline as a label/evaluation sanity check → train
+AMBER → modality ablations → the difficulty and marginal-utility analysis →
+only then the adaptive cost-aware gate.

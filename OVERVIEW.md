@@ -4,12 +4,13 @@ High-level summary of the work so far: what the raw dataset contains, what
 preprocessing was built, what the processed dataset holds, and what to put in
 front of an audience.
 
-**Status: preprocessing complete and verified. No models trained yet.**
+**Status: preprocessing and the AMBER model are implemented and verified.
+No training run completed yet.**
 
 - Task: predict the best beam of a **64-beam codebook** from multimodal sensing
 - Dataset: **DeepSense6G 2022 Multi-Modal Beam Prediction**, scenarios **31–34**
-- Pipeline follows **AMBER** (Wen et al.), our main baseline
-- Three defects found in the public data release (see §5)
+- Preprocessing and architecture both follow **AMBER** (Wen et al.)
+- Three defects found in the public data release (see §6)
 
 ---
 
@@ -139,8 +140,8 @@ for. Two columns, so no name ever means two things:
 | `development` | `val` | 1,350 | model selection, early stopping |
 | `adaptation` | `adaptation` | 100 | official labelled set, held out whole |
 | `test` | `test` | 0 | **official test release only** — awaiting data |
-| `development` | `excluded_nan_pwr` | 58 | corrupt labels (§5) |
-| `development` | `no_target` | 4,191 | scenario 34, no power files (§5) |
+| `development` | `excluded_nan_pwr` | 58 | corrupt labels (§6) |
+| `development` | `no_target` | 4,191 | scenario 34, no power files (§6) |
 
 **6,994 usable samples.** Nothing derived from development is ever called
 `test`, so any number on the `test` split is unambiguously on official held-out
@@ -166,7 +167,46 @@ the wording, but leaks). **Always state which mode produced a number.**
 
 ---
 
-## 5. Three defects found in the public dataset
+## 5. The model
+
+`amber/` implements the AMBER architecture, one module per concern:
+
+| Stage | What it does | Paper |
+|---|---|---|
+| **Encoders** | ResNet34 (image), ResNet18 (lidar, radar), 3-layer MLPs (GPS, beam history) → tokens in a common 256-dim space | eqs. 9–13 |
+| **Embeddings** | sinusoidal spatial + temporal position, then a learnable per-modality weight `α = softmax(w/τ)` | eqs. 16–19 |
+| **Modality-specific block** | self-attention **masked to stay inside each modality**, so nothing leaks between sensors yet | eqs. 21–27 |
+| **Fusion block** | a learnable fusion token cross-attends to **only the modalities that are actually present** | eqs. 28–31 |
+| **CMA** | class queries per modality aligned to the fusion query by a contrastive loss — **training only**, a regulariser | eqs. 32–34 |
+| **Head + loss** | 64 logits; focal loss with **Gaussian soft labels** over the codebook, plus contrastive and L2 terms | eqs. 35–36 |
+
+Two design points worth understanding:
+
+**Missing modalities are handled in three places at once** — the input is
+zeroed, the fusion mask blocks attention to it, and it drops out of the
+contrastive and regularisation terms. That is what makes the model work under
+arbitrary sensor availability, and it is the hook the eventual cost-aware
+routing idea plugs into.
+
+**The loss knows beams are ordered.** Predicting beam 31 when the truth is 30
+costs much less than predicting beam 5, because adjacent beams point in
+adjacent directions. This matches what the DBA metric rewards.
+
+Verified: the token budget reproduces the paper's `N = 108` exactly, all 32
+missing-modality patterns produce finite outputs, gradients reach every
+parameter, and the model drives 8 samples to 100 % Top-1 — the end-to-end proof
+the wiring is right. 24 tests in `tests/test_amber.py` check the paper's claims,
+not just that the code runs.
+
+```bash
+PY=~/.venvs/beamprep/bin/python
+$PY -m amber.train --name amber-full        # 20 epochs, AdamW, cosine schedule
+$PY -m pytest -q                            # the invariant suite
+```
+
+---
+
+## 6. Three defects found in the public dataset
 
 None caused by our code; all found by `audit_dataset.py`.
 
@@ -199,7 +239,7 @@ include beam history.
 
 ---
 
-## 6. What to show when presenting
+## 7. What to show when presenting
 
 Suggested order. The through-line: *the data is real and messy, we understood
 it, and the foundation is correct.*
@@ -229,7 +269,7 @@ treats *missing modalities as normal*, which is what makes the cost-aware
 routing idea implementable on top of it rather than a separate architecture.
 
 ### Slide 5 — Data-integrity findings *(the strongest slide)*
-All three defects from §5. This is original diagnostic work a reader cannot get
+All three defects from §6. This is original diagnostic work a reader cannot get
 from the papers. **Lead with the corrupt labels** — "the official labels are
 wrong for 58 samples, and the standard sanity check cannot detect it because
 both sides share the bug" is a genuinely notable result. Pair the flatness
@@ -242,10 +282,17 @@ the block scheme, the verified zero-overlap result, and the source-vs-split
 table. Mention that AMBER's stated split is self-contradictory and that we
 support both modes. This is the slide that signals methodological care.
 
-### Slide 7 — What is ready, what is next
-Sizes, sample counts, split counts, tensor shapes. Then the roadmap: GPS-only
-sanity baseline → AMBER → modality ablations → difficulty analysis → the
-cost-aware gate.
+### Slide 7 — The model
+The architecture diagram from §5, and the one idea that carries the project:
+AMBER treats **missing modalities as normal**, masking them out of attention
+rather than imputing them. Say that the implementation is verified against the
+paper's own equations (token count, mask semantics, loss form) by a test suite,
+and that it can overfit a tiny batch — the standard evidence of correct wiring.
+
+### Slide 8 — What is ready, what is next
+Sizes, sample counts, split counts, tensor shapes, parameter count. Then the
+roadmap: GPS-only sanity baseline → train AMBER → modality ablations →
+difficulty analysis → the cost-aware gate.
 
 ### One number to plant early
 AMBER's own ablation (its Table V): **BeamIdx + GPS alone reaches 58.81 % Top-1
@@ -255,20 +302,22 @@ it defines the bar the adaptive-routing idea must clear, and makes the
 cost-efficiency premise concrete rather than speculative.
 
 ### What NOT to claim yet
-No accuracy numbers of our own — nothing has been trained. And no novelty claim
+No accuracy numbers of our own — the model is implemented and verified, but no
+training run has been completed. And no novelty claim
 for adaptive modality selection until the literature comparison in the project
 plan is done. The honest framing today is *"foundation built, defects found,
 baselines next."*
 
 ---
 
-## 7. Reproducing everything
+## 8. Reproducing everything
 
 ```bash
 python3 -m venv ~/.venvs/beamprep
 ~/.venvs/beamprep/bin/pip install -r requirements.txt
 
 PY=~/.venvs/beamprep/bin/python bash preprocessing_amber/run_preprocessing.sh
+~/.venvs/beamprep/bin/python -m amber.train --name amber-full
 ```
 
 Full detail — raw formats, per-stage maths, the five hyperparameters AMBER

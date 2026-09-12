@@ -1,13 +1,19 @@
-# Preprocessing dependencies for the AMBER pipeline (DeepSense6G scenarios 31-34).
+# Dependencies for the AMBER pipeline (DeepSense6G scenarios 31-34).
 # Verified on macOS/arm64 with CPython 3.14.
-#
+
+# --- preprocessing
 # Open3D is deliberately NOT required: it publishes no wheels for Python 3.14,
 # and preprocessing_amber/ply_io.py provides the two calls it was used for.
-# torchvision is not required either -- AMBER applies no photometric
-# augmentation. torch is needed only later, for training, not for preprocessing.
 numpy>=2.0
 scipy>=1.13
 pandas>=2.2
 pillow>=10.0
 tqdm>=4.66
 joblib>=1.3
+
+# --- model and training
+torch>=2.4
+torchvision>=0.19        # pretrained ResNet18/34 backbones
+
+# --- tests
+pytest>=8.0
