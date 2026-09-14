@@ -16,6 +16,7 @@ import argparse
 import json
 import math
 import time
+from dataclasses import asdict
 from pathlib import Path
 
 import numpy as np
@@ -99,6 +100,14 @@ def train(args) -> None:
         num_workers=args.workers, device=args.device,
     )
 
+    # Per-modality drop probabilities, in config.MODALITIES order. Beam history
+    # can be dropped harder than the rest: it is absent for every sample of the
+    # official test release (no mmWave_data shipped), so training must not let
+    # the model depend on it.
+    beam_p = args.modality_dropout if args.beam_dropout is None else args.beam_dropout
+    dropout_probs = [beam_p if m == "beam" else args.modality_dropout
+                     for m in MODALITIES]
+
     torch.manual_seed(train_cfg.seed)
     np.random.seed(train_cfg.seed)
     device = pick_device(train_cfg.device)
@@ -143,16 +152,36 @@ def train(args) -> None:
     (run_dir / "config.json").write_text(json.dumps(as_dict(model_cfg, train_cfg), indent=2))
 
     generator = torch.Generator(device="cpu").manual_seed(train_cfg.seed)
-    history, best = [], -1.0
+    history, best, start_epoch = [], -1.0, 1
 
-    for epoch in range(1, train_cfg.epochs + 1):
+    # Resume from the rolling checkpoint. Colab sessions are interrupted often
+    # enough that a multi-hour run needs to survive a disconnect.
+    last_path = run_dir / "last.pt"
+    if args.resume and last_path.exists():
+        ckpt = torch.load(last_path, map_location=device, weights_only=False)
+        model.load_state_dict(ckpt["model"])
+        optimizer.load_state_dict(ckpt["optimizer"])
+        scheduler.load_state_dict(ckpt["scheduler"])
+        generator.set_state(ckpt["generator"].to(torch.uint8).cpu())
+        history = ckpt.get("history", [])
+        best = ckpt.get("best", -1.0)
+        start_epoch = ckpt["epoch"] + 1
+        print(f"resumed from {last_path} at epoch {ckpt['epoch']} "
+              f"(best val top1 {best:.4f})")
+        if start_epoch > train_cfg.epochs:
+            print(f"already completed {ckpt['epoch']} of {train_cfg.epochs} epochs; "
+                  f"raise --epochs to continue")
+    elif args.resume:
+        print(f"--resume given but {last_path} not found; starting fresh")
+
+    for epoch in range(start_epoch, train_cfg.epochs + 1):
         model.train()
         running = {"loss": 0.0, "focal": 0.0, "contrastive": 0.0, "l2": 0.0}
         seen = 0
         start = time.time()
 
         for batch in loaders["train"]:
-            batch = apply_modality_dropout(batch, train_cfg.modality_dropout, generator)
+            batch = apply_modality_dropout(batch, dropout_probs, generator)
             batch = to_device(batch, device)
             # unlabelled rows cannot contribute to the focal term
             if (batch["target"] < 0).any():
@@ -194,8 +223,20 @@ def train(args) -> None:
         if val_top1 == val_top1 and val_top1 > best:      # skips NaN
             best = val_top1
             torch.save({"model": model.state_dict(),
-                        "config": as_dict(model_cfg, train_cfg),
+                        "config": {**as_dict(model_cfg, train_cfg),
+                                   "dropout_probs": dict(zip(MODALITIES, dropout_probs))},
+                        # kept separately so amber.predict can rebuild the exact
+                        # architecture without being told the flags again
+                        "model_config": asdict(model_cfg),
                         "epoch": epoch, "val_top1": val_top1}, run_dir / "best.pt")
+
+        torch.save({"model": model.state_dict(),
+                    "optimizer": optimizer.state_dict(),
+                    "scheduler": scheduler.state_dict(),
+                    "generator": generator.get_state(),
+                    "model_config": asdict(model_cfg),
+                    "history": history, "best": best, "epoch": epoch},
+                   run_dir / "last.pt")
 
         import csv
         with open(run_dir / "history.csv", "w", newline="") as fh:
@@ -257,7 +298,14 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--epochs", type=int, default=TrainConfig.epochs)
     p.add_argument("--batch-size", type=int, default=TrainConfig.batch_size)
     p.add_argument("--lr", type=float, default=TrainConfig.lr)
-    p.add_argument("--modality-dropout", type=float, default=TrainConfig.modality_dropout)
+    p.add_argument("--modality-dropout", type=float, default=TrainConfig.modality_dropout,
+                   help="per-modality drop probability during training")
+    p.add_argument("--beam-dropout", type=float, default=None,
+                   help="override the drop probability for beam history alone. The official "
+                        "test release ships no mmWave_data, so beam history is absent for "
+                        "100%% of test samples while present for ~96%% of training ones; a "
+                        "high value here stops the model depending on a signal it will not "
+                        "have at inference. Default: same as --modality-dropout.")
     p.add_argument("--pool", type=int, default=ModelConfig.pool_hw[0],
                    help="VA = HA, the adaptive-pool grid side")
     p.add_argument("--temporal-pool", default=ModelConfig.temporal_pool,
@@ -269,6 +317,8 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--limit-train", type=int, default=None, help="cap train samples")
     p.add_argument("--limit-eval", type=int, default=None, help="cap eval samples")
     p.add_argument("--eval-only", action="store_true")
+    p.add_argument("--resume", action="store_true",
+                   help="continue from runs/<name>/last.pt if it exists")
     p.add_argument("--checkpoint", default=None)
     p.add_argument("--splits", nargs="+", default=["val", "adaptation", "test"])
     return p

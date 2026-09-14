@@ -19,9 +19,16 @@ Representations produced:
 Values the paper does not state numerically are marked PAPER-UNSPECIFIED below;
 each is a documented choice of ours, exposed as a CLI flag.
 """
+import os
 from pathlib import Path
 
-ROOT = Path(__file__).resolve().parent.parent
+REPO = Path(__file__).resolve().parent.parent
+
+# Where the `data/` tree lives. Defaults to the repository root, but can be
+# pointed elsewhere with AMBER_DATA_ROOT -- needed when the code and the dataset
+# sit on different disks, as on Colab where the code is unpacked next to the
+# notebook while the data is staged on fast local storage.
+ROOT = Path(os.environ.get("AMBER_DATA_ROOT", REPO)).expanduser().resolve()
 RAW = ROOT / "data" / "raw"
 PROCESSED = ROOT / "data" / "processed_amber"
 INDEX_DIR = PROCESSED / "index"

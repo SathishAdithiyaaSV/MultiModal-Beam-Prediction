@@ -25,6 +25,8 @@ Two details that matter for correctness:
 import json
 from pathlib import Path
 
+from typing import Sequence
+
 import numpy as np
 import pandas as pd
 import torch
@@ -126,21 +128,39 @@ class AmberDataset(Dataset):
         return self.frame["sample_id"].tolist()
 
 
-def apply_modality_dropout(batch: dict[str, torch.Tensor], p: float,
+def apply_modality_dropout(batch: dict[str, torch.Tensor],
+                           p: float | Sequence[float],
                            generator: torch.Generator | None = None
                            ) -> dict[str, torch.Tensor]:
     """Random modality masking during training (Sec. IV-A).
 
-    Each present modality is independently dropped with probability `p`, which
-    is what teaches the mask of eqs. (23)/(30) to generalise to arbitrary
-    missing-modality patterns at test time. At least one modality is always
-    kept, since a sample with nothing available carries no signal to learn from.
+    Each present modality is independently dropped, which is what teaches the
+    mask of eqs. (23)/(30) to generalise to arbitrary missing-modality patterns.
+    At least one modality is always kept, since a sample with nothing available
+    carries no signal to learn from.
+
+    `p` is either one probability for all modalities, or one per modality in
+    config.MODALITIES order. The per-modality form matters here because the
+    official DeepSense6G test release ships no mmWave_data at all, so beam
+    history is absent for 100% of test samples while present for ~96% of
+    training ones. Dropping it at the paper's uniform low rate would let the
+    model lean on a signal that vanishes at inference.
     """
-    if p <= 0:
-        return batch
     availability = batch["availability"]
+    if isinstance(p, (int, float)):
+        if p <= 0:
+            return batch
+        probs = torch.full((availability.shape[1],), float(p), device=availability.device)
+    else:
+        probs = torch.as_tensor(list(p), dtype=torch.float32, device=availability.device)
+        if probs.numel() != availability.shape[1]:
+            raise ValueError(f"expected {availability.shape[1]} dropout probabilities, "
+                             f"got {probs.numel()}")
+        if float(probs.max()) <= 0:
+            return batch
+
     keep = (torch.rand(availability.shape, generator=generator,
-                       device=availability.device) >= p).to(availability.dtype)
+                       device=availability.device) >= probs).to(availability.dtype)
     dropped = availability * keep
 
     # restore one modality for any row left entirely empty
