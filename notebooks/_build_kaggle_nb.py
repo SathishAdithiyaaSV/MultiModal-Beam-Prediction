@@ -100,55 +100,92 @@ if not INTERNET:
 C.append(md(r"""
 ## 2. Locate the attached dataset
 
-Searches `/kaggle/input` for the index (`samples.csv`) and the three source
-directories, tolerating both the flat and the doubled Kaggle layout.
+Kaggle nests inputs unpredictably — the path can be `/kaggle/input/<slug>/...`
+or `/kaggle/input/datasets/<user>/<slug>/...`, and each folder is often doubled
+(`development/development/...`). So nothing here assumes a depth: the index is
+found by locating `samples.csv`, and each source by locating the directory that
+actually contains `scenario*` folders.
 """))
 C.append(code(r"""
+import os
+
 INPUT_ROOT = Path("/kaggle/input")
 SOURCES = ("development", "adaptation", "test")
 
 
+def walk_dirs(base, follow=True):
+    # os.walk(followlinks=True) rather than Path.rglob: Kaggle sometimes exposes
+    # dataset folders as symlinks, which rglob refuses to descend into
+    for dirpath, dirnames, filenames in os.walk(base, followlinks=follow):
+        yield Path(dirpath), dirnames, filenames
+
+
 def find_index(base):
-    # the directory holding samples.csv; likely depths first, then a full walk
+    # the directory holding samples.csv; cheap guesses first, then a full walk
     for cand in (base / "index" / "index", base / "index", base):
         if (cand / "samples.csv").exists():
             return cand
-    hits = sorted(base.rglob("samples.csv"))
-    return hits[0].parent if hits else None
+    for d, _dirs, files in walk_dirs(base):
+        if "samples.csv" in files:
+            return d
+    return None
 
 
 def find_source(base, name):
-    # the directory that directly contains scenario* folders
+    # the directory that DIRECTLY contains scenario* folders, not its parent
     for cand in (base / name / name, base / name):
         if cand.is_dir() and any(cand.glob("scenario*")):
             return cand
     return None
 
 
-DATASET = INDEX_SRC = None
-for base in sorted(p for p in INPUT_ROOT.glob("*") if p.is_dir()):
-    idx = find_index(base)
-    if idx is not None:
-        DATASET, INDEX_SRC = base, idx
-        break
+INDEX_SRC = find_index(INPUT_ROOT)
+if INDEX_SRC is None:
+    print("directories under /kaggle/input (first 40):")
+    for d, _dirs, _files in list(walk_dirs(INPUT_ROOT))[:40]:
+        print("  ", d)
+    raise SystemExit("Could not find samples.csv anywhere under /kaggle/input. "
+                     "Attach the preprocessed dataset via + Add Input.")
 
-if DATASET is None:
-    print("contents of /kaggle/input:")
-    for p in sorted(INPUT_ROOT.rglob("*"))[:40]:
-        print("  ", p)
-    raise SystemExit("Could not find samples.csv. Attach the preprocessed dataset "
-                     "via + Add Input.")
+# The dataset root sits just above the index, whether or not it is doubled:
+#   doubled  <root>/index/index/samples.csv
+#   flat     <root>/index/samples.csv
+CANDIDATE_ROOTS = [INDEX_SRC.parent, INDEX_SRC.parent.parent, INDEX_SRC]
 
-SOURCE_DIRS = {s: find_source(DATASET, s) for s in SOURCES}
+SOURCE_DIRS = {}
+for s in SOURCES:
+    SOURCE_DIRS[s] = next(
+        (d for d in (find_source(r, s) for r in CANDIDATE_ROOTS) if d), None)
 
-print(f"dataset:  {DATASET}")
-print(f"index:    {INDEX_SRC}")
+# Last resort, depth-agnostic: any directory of this name holding scenario*
+# folders. Covers whatever nesting Kaggle invents.
+missing = [k for k, v in SOURCE_DIRS.items() if v is None]
+if missing:
+    for d, dirnames, _files in walk_dirs(INPUT_ROOT):
+        if d.name in missing and any(n.startswith("scenario") for n in dirnames):
+            SOURCE_DIRS[d.name] = d
+            missing.remove(d.name)
+            if not missing:
+                break
+
+DATASET = next((r for r in CANDIDATE_ROOTS
+                if any(d is not None and r in d.parents for d in SOURCE_DIRS.values())),
+               INDEX_SRC.parent)
+
+print(f"dataset root: {DATASET}")
+print(f"index:        {INDEX_SRC}")
 for s, d in SOURCE_DIRS.items():
     if d is None:
         print(f"  {s:<12} MISSING")
     else:
         print(f"  {s:<12} {d}  ({len(list(d.glob('scenario*')))} scenarios)")
-assert SOURCE_DIRS["development"], "development source not found — training needs it"
+
+if SOURCE_DIRS["development"] is None:
+    print("\ndirectories under the dataset root (first 40):")
+    for d, _dirs, _files in list(walk_dirs(DATASET))[:40]:
+        print("  ", d)
+    raise SystemExit("development source not found — training needs it. The paths "
+                     "above should reveal the real layout.")
 """))
 
 C.append(md(r"""
@@ -195,39 +232,91 @@ print("\nstaging verified")
 
 C.append(md("## 4. Get the code"))
 C.append(code(r"""
-import os
+import shutil
 
-REPO = "https://github.com/SathishAdithiyaaSV/MultiModal-Beam-Prediction.git"
+REPO_SLUG = "SathishAdithiyaaSV/MultiModal-Beam-Prediction"
 PROJECT = Path("/kaggle/working/project")
 
-if not (PROJECT / "amber").exists():
-    r = subprocess.run(["git", "clone", "--depth", "1", REPO, str(PROJECT)],
-                       capture_output=True, text=True)
-    if r.returncode != 0:
-        # Private repo, or git unavailable. Fall back to a code dataset if one
-        # is attached (any input folder containing an amber/ package).
-        print(r.stderr.strip()[:400])
-        found = None
-        for base in sorted(p for p in INPUT_ROOT.glob("*") if p.is_dir()):
-            for cand in (base, base / base.name):
-                if (cand / "amber" / "model.py").exists():
-                    found = cand
+
+def find_code(root):
+    # depth-agnostic: any directory holding an amber/ package with model.py
+    for d, _dirnames, filenames in walk_dirs(root):
+        if d.name == "amber" and "model.py" in filenames:
+            return d.parent
+    return None
+
+
+def try_clone(url, dest, label):
+    # GIT_TERMINAL_PROMPT=0 so a private repo fails immediately instead of
+    # blocking on a username prompt that a notebook can never answer
+    r = subprocess.run(["git", "clone", "--depth", "1", url, str(dest)],
+                       capture_output=True, text=True,
+                       env={**os.environ, "GIT_TERMINAL_PROMPT": "0"})
+    if r.returncode == 0:
+        print(f"cloned via {label}")
+        return True
+    detail = (r.stderr.strip().splitlines() or [""])[-1][:160]
+    print(f"clone via {label} failed: {detail}")
+    shutil.rmtree(dest, ignore_errors=True)
+    return False
+
+
+if (PROJECT / "amber" / "model.py").exists():
+    print(f"code already present at {PROJECT}")
+else:
+    ok = False
+
+    # 1. private repo via a GitHub token in Kaggle Secrets (Add-ons -> Secrets),
+    #    stored under any of these names
+    token = None
+    try:
+        from kaggle_secrets import UserSecretsClient
+
+        client = UserSecretsClient()
+        for key in ("GITHUB_TOKEN", "github_token", "GH_TOKEN"):
+            try:
+                token = client.get_secret(key)
+                if token:
+                    print(f"using GitHub token from secret {key!r}")
                     break
-            if found:
-                break
-        if found is None:
-            raise SystemExit(
-                "Clone failed and no code dataset found.\n"
-                "Either make the GitHub repo public, or attach the code "
-                "(amber/ + preprocessing_amber/) as a second Kaggle dataset.")
-        shutil.copytree(found, PROJECT, dirs_exist_ok=True)
-        print(f"copied code from {found}")
-    else:
-        print("cloned", REPO)
+            except Exception:
+                continue
+    except Exception:
+        pass
+    if token:
+        ok = try_clone(f"https://{token}@github.com/{REPO_SLUG}.git", PROJECT, "token")
+
+    # 2. plain clone, which only works if the repo is public
+    if not ok:
+        ok = try_clone(f"https://github.com/{REPO_SLUG}.git", PROJECT, "public https")
+
+    # 3. code attached as a Kaggle dataset, at any nesting depth
+    if not ok:
+        src = find_code(INPUT_ROOT)
+        if src is not None:
+            shutil.copytree(src, PROJECT, dirs_exist_ok=True)
+            print(f"copied code from attached dataset: {src}")
+            ok = True
+
+    if not ok:
+        raise SystemExit(
+            "Could not obtain the code. The repo is private, so pick one:\n"
+            "\n"
+            "  A. Attach the code as a Kaggle dataset (no GitHub needed).\n"
+            "     Locally: zip the amber/ and preprocessing_amber/ folders,\n"
+            "     upload as a new Kaggle dataset, then + Add Input here.\n"
+            "     This cell finds it automatically at any depth.\n"
+            "\n"
+            "  B. Add a GitHub token: create a fine-grained PAT with read access\n"
+            "     to the repo, then Add-ons -> Secrets -> new secret named\n"
+            "     GITHUB_TOKEN. Re-run; the repo can stay private.\n"
+            "\n"
+            "  C. Make the GitHub repo public, then re-run.")
 
 os.chdir(PROJECT)
-sys.path.insert(0, str(PROJECT))
-print(f"cwd = {Path.cwd()}")
+if str(PROJECT) not in sys.path:
+    sys.path.insert(0, str(PROJECT))
+print(f"\ncwd = {Path.cwd()}")
 print("package:", sorted(p.name for p in (PROJECT / "amber").glob("*.py")))
 """))
 
