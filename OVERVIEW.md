@@ -136,16 +136,15 @@ for. Two columns, so no name ever means two things:
 
 | source | → split | n | Role |
 |---|---|---|---|
-| `development` | `train` | 5,544 | fit parameters |
-| `development` | `val` | 1,350 | model selection, early stopping |
+| `development` | `train` | 8,844 | fit parameters |
+| `development` | `val` | 2,198 | model selection, early stopping |
 | `adaptation` | `adaptation` | 100 | official labelled set, held out whole |
-| `test` | `test` | 0 | **official test release only** — awaiting data |
-| `development` | `excluded_nan_pwr` | 58 | corrupt labels (§6) |
-| `development` | `no_target` | 4,191 | scenario 34, no power files (§6) |
+| `test` | `test` | 625 | **official test release** — unlabelled, predictions only |
+| `development` | `excluded_nan_pwr` | 101 | corrupt labels (§5) |
 
-**6,994 usable samples.** Nothing derived from development is ever called
-`test`, so any number on the `test` split is unambiguously on official held-out
-data.
+**11,767 usable samples**, spanning scenarios 32, 33 and 34 for training.
+Nothing derived from development is ever called `test`, so any number on the
+`test` split is unambiguously on official held-out data.
 
 Adding the official test set is a drop-in: put it at `data/raw/test/` and re-run
 the pipeline. It is **unlabelled**, which is handled — those rows get
@@ -210,10 +209,14 @@ $PY -m pytest -q                            # the invariant suite
 
 None caused by our code; all found by `audit_dataset.py`.
 
-**1 — Scenario 34 is unusable as downloaded.** Radar, vehicle GPS and the power
-files are entirely absent; only 1,007 of 4,439 LiDAR clouds are present, and one
-of those is truncated. No power vector means no label. 4,191 samples lost, ~38 %
-of the development set. *Fix: re-download scenario 34.*
+**1 — Scenario 34 arrived incomplete (since largely fixed).** The first download
+had no radar, no vehicle GPS and no power files, and only 1,007 of 4,439 LiDAR
+clouds — so with no labels its 4,191 samples were unusable. After
+re-downloading, camera, LiDAR and power are complete and the labels verify, so
+scenario 34 now contributes 3,300 train / 848 val samples. Two gaps remain: the
+`unit2` GPS directory is still absent (~200 KB of text files, worth fetching),
+and 800 radar files are missing, which leaves only 40 % of scenario-34 samples
+with usable radar because a sample needs all five consecutive frames.
 
 **2 — 58 samples have corrupt labels.** Their power files contain literal `nan`
 values, and for **all 58** the official `unit1_beam` equals the index of the
@@ -232,10 +235,12 @@ good. This directly reshapes what "hard sample" can mean in the planned
 difficulty analysis; prefer continuous margin/entropy measures or a tighter
 threshold.
 
-A fourth, milder issue: **beam history is unavailable for all 100 adaptation
-samples** (that release ships only the target frame's power file). AMBER's mask
-handles it, but adaptation results aren't comparable to development results that
-include beam history.
+A fourth, milder issue: **beam history is unavailable for the entire adaptation
+and test splits** — those releases ship only the target frame's power file, not
+the preceding ones. Development has it for 97.9 % of samples. AMBER's mask
+handles the absence, but it means adaptation and test numbers are not directly
+comparable to validation numbers that include beam history, and it is why
+training deliberately drops beam history harder than the paper does.
 
 ---
 

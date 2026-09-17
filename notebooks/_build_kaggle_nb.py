@@ -52,13 +52,13 @@ creates.
 
 | split | n | used for |
 |---|---|---|
-| `train` | 5,544 | fitting |
-| `val` | 1,350 | model selection + reported metrics |
+| `train` | 8,844 | fitting |
+| `val` | 2,198 | model selection + reported metrics |
 | `adaptation` | 100 | held-out labelled check |
 | `test` | 625 | **unlabelled** — predictions only, no metrics possible |
 
 The official test release ships no `mmWave_data`, so beam history is missing for
-100 % of test samples but present in ~96 % of training ones. `BEAM_DROPOUT` is
+100 % of test samples but present in 97.9 % of training ones. `BEAM_DROPOUT` is
 set high to stop the model depending on a signal it will not have at inference.
 """))
 
@@ -380,15 +380,16 @@ LR = 1e-4                 # AMBER Table II
 POOL = 4                  # VA = HA -> 16 tokens per grid modality
 MODALITY_DROPOUT = 0.15
 BEAM_DROPOUT = 0.50       # beam history is absent from the whole test split
-WORKERS = 2
+WORKERS = 4
 DO_ABLATION = True        # extra cell at the end; a few short eval passes
 
 RUN_DIR.mkdir(parents=True, exist_ok=True)
 print(f"outputs -> {OUT}")
 print(f"{EPOCHS} epochs, batch {BATCH_SIZE}, lr {LR}, pool {POOL}")
-print("\nKaggle GPU sessions are capped at ~9 h. If an epoch turns out slower "
-      "than ~25 min, lower EPOCHS and re-run — training resumes from last.pt "
-      "within the same session.")
+print("\nAt ~8,800 training samples expect roughly 12 min/epoch on a T4, so "
+      "20 epochs is about 4 h — well inside Kaggle's ~9 h GPU session.")
+print("Use Save & Run All rather than an interactive session: /kaggle/working "
+      "is wiped when an interactive session disconnects.")
 """))
 
 C.append(md(r"""
@@ -405,7 +406,7 @@ sharply on the real test set. Set `BEAM_DROPOUT = MODALITY_DROPOUT` for the
 paper's exact recipe.
 """))
 C.append(code(r"""
-cmd = [sys.executable, "-m", "amber.train",
+cmd = [sys.executable, "-u", "-m", "amber.train",   # -u: stream output live
        "--index-dir", str(INDEX_DIR),
        "--run-dir", str(RUN_DIR),
        "--name", RUN_NAME,

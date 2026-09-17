@@ -189,15 +189,24 @@ Verified end to end against a staged unlabelled source: the rows landed in
 
 | split | n | scenarios |
 |---|---|---|
-| `train` | 5,544 | 32, 33 |
-| `val` | 1,350 | 32, 33 |
+| `train` | 8,844 | 32, 33, 34 |
+| `val` | 2,198 | 32, 33, 34 |
 | `adaptation` | 100 | 31, 32, 33 |
-| `test` | 0 | *awaiting the official release* |
-| `excluded_nan_pwr` | 58 | 32, 33 — corrupt labels, see §7.2 |
-| `no_target` | 4,191 | 34 — no power files shipped, see §7.1 |
+| `test` | 625 | 31, 32, 33, 34 — **unlabelled** |
+| `excluded_nan_pwr` | 101 | 32, 33, 34 — corrupt labels, see §7.2 |
+| `no_target` | 0 | — |
 
-**6,994 usable samples.** Filter with
+**11,767 usable samples.** Filter with
 `~split.isin(['no_target','excluded_nan_pwr'])`.
+
+Per-modality availability across `train`, which the eq. (3) mask consumes:
+
+| | image | lidar | radar | beam | gps |
+|---|---|---|---|---|---|
+| all scenarios | 1.000 | 1.000 | 0.777 | 0.979 | 0.627 |
+| scenario 34 only | 1.000 | 1.000 | 0.403 | 1.000 | 0.000 |
+
+Scenario 34 drags radar and GPS coverage down for the reasons in §7.1.
 
 ### Why blocks, not random samples
 
@@ -291,27 +300,46 @@ since it directly reveals the target.
 
 All found by `audit_dataset.py`; none caused by this pipeline.
 
-### 7.1 Scenario 34 is incomplete as downloaded
+### 7.1 Scenario 34 arrived incomplete and was re-downloaded
 
-For `development/scenario34` (4,191 samples in the CSV):
+The first download of `development/scenario34` was missing almost everything but
+the camera stream — no radar, no `unit2` GPS, no mmWave power, and only 1,007 of
+4,439 LiDAR files. With no power vectors there are no labels, so all 4,191
+samples sat in `no_target` and the scenario could not be trained on at all.
+
+After re-downloading, the state is:
 
 | Modality | Status |
 |---|---|
-| Camera | complete (4,439 files) |
-| **Radar** | **entirely missing** (no `radar_data/`) |
-| **LiDAR** | **1,007 of 4,439 files** — missing for ~77 % of samples |
-| **GPS `unit2`** | **entirely missing** (no `unit2/`) |
-| **mmWave power** | **entirely missing** (no `mmWave_data/`) |
+| Camera | complete (4,439) |
+| LiDAR | complete (4,439) |
+| **mmWave power** | **complete (4,439)** — labels verified, `argmax(pwr)+1 == unit1_beam` for 4,191/4,191, all 64 beams used |
+| Radar | **3,638 of 4,439**, plus one truncated file |
+| **GPS `unit2`** | **still entirely absent** (no `unit2/` directory) |
 
-No power vectors means no label, so scenario 34 is routed to the `no_target`
-split — 4,191 samples, ~38 % of the development set. One further file,
-`lidar_data_2163.ply`, is **truncated** (header declares 18,865 vertices, body
-holds 10,433 values); it is reported and skipped rather than aborting the run.
+So scenario 34 is now trainable and contributes 3,300 train / 848 val samples,
+but with reduced modality coverage. Because a sample needs all five consecutive
+radar frames, the 800 missing radar files cost far more than their count
+suggests: only **40 % of scenario-34 samples have usable radar**.
 
-**Action: re-download scenario 34.**
+Two gaps remain, in priority order:
 
-Note also **scenario 31 appears only in the adaptation set** (50 samples). Even
-once scenario 34 is fixed, there is no scenario-31 training data in this release.
+1. **`unit2/GPS_data` is absent** — roughly 4,200 text files of ~50 bytes, so
+   about 200 KB in total. Worth fetching: GPS is one of AMBER's strongest cheap
+   modalities (its Table V puts BeamIdx+GPS alone at 58.81 % Top-1), and its
+   absence across *every* scenario-34 sample makes "scenario 34" and "GPS
+   missing" perfectly correlated in training. That confound would distort the
+   modality ablation — a large apparent GPS contribution could partly be the
+   model using GPS-absence as a scenario cue.
+2. **800 radar files** (~1.6 GB) to lift scenario-34 radar coverage from 40 %.
+
+Two files are **truncated** rather than missing and are reported and skipped
+rather than aborting a run: `lidar_data_2163.ply` (header declares 18,865
+vertices, body holds 10,433 values) and `radar_data_3998.npy`.
+
+Note also **scenario 31 appears only in the adaptation and test sets** — there
+is no scenario-31 training data anywhere in this release. The paper's S31 = 7,012
+comes from a separate standalone per-scenario download.
 
 ### 7.2 58 power vectors contain NaN, and their official labels are wrong
 
@@ -348,11 +376,12 @@ tighter threshold such as "within 10 % of best power", which has a median of 5.
 Worth confirming against the DeepSense6G documentation before building the
 beam-difficulty analysis, since it changes what "ambiguous sample" can mean.
 
-### 7.4 Beam history is unavailable on the entire adaptation set
+### 7.4 Beam history is unavailable on the adaptation and test splits
 
-0 of 100 adaptation samples have usable beam history: that release ships only
-the target frame's power file, not the preceding frames. Development is fine at
-~96 %.
+0 of 100 adaptation samples and 0 of 625 test samples have usable beam history:
+those releases ship only the target frame's power file, not the preceding ones.
+Development has it for 97.9 % of samples — including 100 % of scenario 34, whose
+`mmWave_data` covers every frame.
 
 AMBER's mask handles it, but `m_beam = 0` there, so adaptation-split results are
 **not comparable** to development-split results that include beam history —

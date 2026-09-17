@@ -68,7 +68,13 @@ def _process(src, dst_dir, nfft, overwrite):
     dst = dst_dir / src.name
     if not overwrite and dst.exists():
         return "skip"
-    np.save(dst, build_tensor(np.load(src), nfft))
+    try:
+        cube = np.load(src)
+    except (ValueError, OSError, EOFError) as exc:
+        # Some DeepSense6G .npy files arrive truncated on download. Report and
+        # skip rather than aborting the whole scenario.
+        return f"corrupt:{src.name}:{exc}"
+    np.save(dst, build_tensor(cube, nfft))
     return "done"
 
 
@@ -83,8 +89,11 @@ def run(source, scenario, nfft, n_jobs, overwrite):
     res = Parallel(n_jobs=n_jobs)(
         delayed(_process)(f, dst_dir, nfft, overwrite)
         for f in tqdm(files, desc=f"radar(AMBER) {source}/{scenario}", unit="frm"))
-    print(f"[{source}/{scenario}] {res.count('done')} written, {res.count('skip')} present "
-          f"-> {dst_dir}")
+    corrupt = [r for r in res if r.startswith("corrupt:")]
+    print(f"[{source}/{scenario}] {res.count('done')} written, {res.count('skip')} present, "
+          f"{len(corrupt)} unreadable -> {dst_dir}")
+    for c in corrupt:
+        print(f"   CORRUPT {c.split(':', 2)[1]} -- re-download this file")
 
 
 def main():
