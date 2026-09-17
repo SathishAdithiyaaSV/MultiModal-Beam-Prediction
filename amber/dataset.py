@@ -68,12 +68,43 @@ class AmberDataset(Dataset):
         self.lidar_cols = [f"lidar_bev_{i}" for i in range(1, cfg.window + 1)]
         self.radar_cols = [f"radar_{i}" for i in range(1, cfg.window + 1)]
         self.beam_cols = [f"beam_hist_{i}" for i in range(1, cfg.window)]
+        self._shapes = self._probe_shapes()
 
     def __len__(self) -> int:
         return len(self.frame)
 
     # ------------------------------------------------------------------ loaders
+    def _probe_shapes(self) -> dict[str, tuple[int, ...]]:
+        """Per-frame tensor shape of each grid modality, from the first row that
+        has it available.
+
+        Needed because an unavailable modality must still yield a correctly
+        shaped tensor -- the eq. (23)/(30) masks stop the model attending to it,
+        but the collate still has to stack something.
+        """
+        shapes = {}
+        for key, cols, mask in (("image", self.image_cols, "m_image"),
+                                ("lidar", self.lidar_cols, "m_lidar"),
+                                ("radar", self.radar_cols, "m_radar")):
+            have = self.frame.index[self.frame[mask] == 1]
+            if len(have) == 0:
+                shapes[key] = None                # modality absent everywhere
+                continue
+            row = self.frame.loc[have[0]]
+            if key == "image":
+                with Image.open(self.root / row[cols[0]]) as img:
+                    w, h = img.size
+                shapes[key] = (3, h, w)
+            else:
+                shapes[key] = np.load(self.root / row[cols[0]]).shape
+        return shapes
+
     def _load_images(self, row) -> torch.Tensor:
+        # Unavailable modality: return zeros rather than touching the disk. The
+        # files genuinely do not exist for these samples.
+        if not row["m_image"]:
+            shape = self._shapes["image"] or (3, 256, 256)
+            return torch.zeros(len(self.image_cols), *shape)
         frames = []
         for col in self.image_cols:
             with Image.open(self.root / row[col]) as img:
@@ -84,7 +115,10 @@ class AmberDataset(Dataset):
             frames.append(t)
         return torch.stack(frames)
 
-    def _load_maps(self, row, columns) -> torch.Tensor:
+    def _load_maps(self, row, columns, key) -> torch.Tensor:
+        if not row[f"m_{key}"]:
+            shape = self._shapes[key] or ((1, 256, 256) if key == "lidar" else (2, 256, 256))
+            return torch.zeros(len(columns), *shape)
         return torch.stack([torch.from_numpy(
             np.load(self.root / row[col]).astype(np.float32)) for col in columns])
 
@@ -108,8 +142,8 @@ class AmberDataset(Dataset):
         row = self.frame.iloc[i]
         return {
             "image": self._load_images(row),
-            "lidar": self._load_maps(row, self.lidar_cols),
-            "radar": self._load_maps(row, self.radar_cols),
+            "lidar": self._load_maps(row, self.lidar_cols, "lidar"),
+            "radar": self._load_maps(row, self.radar_cols, "radar"),
             "gps": self._load_gps(row),
             "beam": self._load_beam_history(row),
             "availability": torch.tensor([float(row[c]) for c in MASK_COLS]),

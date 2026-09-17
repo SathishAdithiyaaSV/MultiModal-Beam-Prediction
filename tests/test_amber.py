@@ -262,3 +262,76 @@ def test_model_can_overfit_a_tiny_batch():
     with torch.no_grad():
         acc = topk_accuracy(model(batch).logits, targets, (1,))[1]
     assert acc == 1.0, f"could only reach top1={acc}"
+
+
+def test_unavailable_modality_yields_zeros_without_touching_disk(tmp_path):
+    """A modality marked unavailable must not be read from disk.
+
+    Regression test. Scenario 34 ships no radar for ~60% of its samples, and the
+    loader used to call np.load unconditionally, so adding that scenario to
+    training crashed with FileNotFoundError on the first such batch. The eq. (3)
+    mask already tells the model to ignore the modality; the loader just has to
+    return a correctly shaped tensor so the batch still collates.
+    """
+    import json
+
+    import numpy as np
+    import pandas as pd
+    import torch
+    from PIL import Image
+
+    from amber.config import ModelConfig
+    from amber.dataset import AmberDataset
+
+    cfg = ModelConfig(pretrained=False)
+    root = tmp_path
+    index = root / "data" / "processed_amber" / "index"
+    index.mkdir(parents=True)
+
+    # one sample with every modality present, one missing radar entirely
+    made = {}
+    for scn, has_radar in (("scenarioA", True), ("scenarioB", False)):
+        base = root / "data" / "processed_amber" / "dev" / scn
+        for mod in ("camera", "lidar_bev", "radar_ra_rv"):
+            (base / mod).mkdir(parents=True)
+        for i in range(1, cfg.window + 1):
+            Image.new("RGB", (32, 32)).save(base / "camera" / f"img_{i}.jpg")
+            np.save(base / "lidar_bev" / f"l_{i}.npy", np.zeros((1, 32, 32), np.float32))
+            if has_radar:
+                np.save(base / "radar_ra_rv" / f"r_{i}.npy",
+                        np.ones((2, 32, 32), np.float32))
+        made[scn] = base
+
+    rows = []
+    for scn, has_radar in (("scenarioA", 1), ("scenarioB", 0)):
+        rel = f"data/processed_amber/dev/{scn}"
+        row = {"sample_id": scn, "source": "dev", "scenario": scn, "frame": 1,
+               "frame_target": 5, "split": "train", "beam": 3, "beam_official": 3,
+               "pwr_row": len(rows), "pwr_n_nan": 0, "bs_lat": 0.0, "bs_lon": 0.0,
+               "m_image": 1, "m_lidar": 1, "m_radar": has_radar,
+               "m_beam": 1, "m_gps": 1, "n_beam_hist_available": 4}
+        for i in range(1, cfg.window + 1):
+            row[f"image_{i}"] = f"{rel}/camera/img_{i}.jpg"
+            row[f"lidar_bev_{i}"] = f"{rel}/lidar_bev/l_{i}.npy"
+            row[f"radar_{i}"] = f"{rel}/radar_ra_rv/r_{i}.npy"
+        for k in (1, 2):
+            row[f"ue_x_{k}"] = row[f"ue_y_{k}"] = 0.0
+        for i in range(1, cfg.window):
+            row[f"beam_hist_{i}"] = i
+        rows.append(row)
+    pd.DataFrame(rows).to_csv(index / "samples.csv", index=False)
+    (index / "gps_norm.json").write_text(json.dumps({"columns": {
+        c: {"min": 0.0, "max": 1.0} for c in
+        ("ue_x_1", "ue_y_1", "ue_x_2", "ue_y_2")}}))
+
+    ds = AmberDataset(index, "train", cfg)
+    present, absent = ds[0], ds[1]
+
+    # the available sample reads real data; the unavailable one is zeros
+    assert present["radar"].abs().sum() > 0
+    assert absent["radar"].abs().sum() == 0
+    # and both share a shape, so a mixed batch collates
+    assert present["radar"].shape == absent["radar"].shape
+    assert absent["availability"].tolist()[2] == 0.0
+    batch = torch.utils.data.default_collate([present, absent])
+    assert batch["radar"].shape[0] == 2
