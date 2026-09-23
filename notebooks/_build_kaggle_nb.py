@@ -1,4 +1,4 @@
-"""Generate notebooks/amber_kaggle.ipynb.
+"""Generate notebooks/amber_baseline.ipynb.
 
 Kept as a script so the notebook can be regenerated deterministically rather
 than hand-edited as JSON. Note: code-cell bodies must not contain triple
@@ -752,6 +752,6 @@ nb = {
     "nbformat_minor": 4,
 }
 
-out = pathlib.Path(__file__).parent / "amber_kaggle.ipynb"
+out = pathlib.Path(__file__).parent / "amber_baseline.ipynb"
 out.write_text(json.dumps(nb, indent=1))
 print(f"wrote {out} ({len(C)} cells)")
