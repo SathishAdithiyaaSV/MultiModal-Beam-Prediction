@@ -2,10 +2,14 @@
 # regenerate derived with preprocessing_amber/run_preprocessing.sh
 data/
 
-# Run artifacts. Checkpoints are far over GitHub's 100 MB per-file limit
-# (best.pt ~190 MB, last.pt ~570 MB), so only the small text outputs are
-# tracked -- metrics, history and figures are what a reader actually needs.
-runs/
+# Scratch run directory at the repo root (amber.train's default --run-dir).
+# Anchored with a leading slash so it does not also swallow the per-run logs
+# kept under results/*/part*/runs/, which are small and worth tracking.
+/runs/
+
+# Checkpoints are far over GitHub's 100 MB per-file limit (best.pt ~190 MB,
+# last.pt ~570 MB), so only the small text outputs are tracked -- metrics,
+# history and figures are what a reader actually needs.
 results/**/*.pt
 results/**/*.pth
 results/**/*.ckpt

@@ -1,0 +1,35 @@
+{
+  "part": 2,
+  "experiments": [
+    [
+      "gps",
+      "camera"
+    ],
+    [
+      "gps",
+      "lidar"
+    ],
+    [
+      "gps",
+      "radar",
+      "lidar"
+    ],
+    [
+      "gps",
+      "camera",
+      "lidar"
+    ]
+  ],
+  "use_historical_beams": false,
+  "epochs": 10,
+  "batch_size": 16,
+  "lr": 0.0001,
+  "pool": 4,
+  "seed": 2022,
+  "modality_dropout": 0.0,
+  "eval_splits": [
+    "val",
+    "adaptation"
+  ],
+  "note": "test is unlabelled and cannot be scored; historical beams disabled as they are not a challenge input and are absent from the whole test and adaptation splits"
+}
