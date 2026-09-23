@@ -114,7 +114,20 @@ class AMBER(nn.Module):
         # 1. modality-specific encoders, eqs. (9)-(13)
         raw = {m: batch[m] for m in MODALITIES}
         raw = self._zero_missing(raw, availability)
-        tokens = {m: self.encoders[m](raw[m]) for m in MODALITIES}
+        if self.cfg.skip_unavailable_encoders:
+            # A modality unavailable for the whole batch contributes nothing, so
+            # its encoder need not run. Its tokens are still emitted as zeros to
+            # keep the sequence layout fixed.
+            batch_size = availability.shape[0]
+            tokens = {}
+            for i, m in enumerate(MODALITIES):
+                if bool(availability[:, i].any()):
+                    tokens[m] = self.encoders[m](raw[m])
+                else:
+                    tokens[m] = raw[m].new_zeros(
+                        batch_size, self.layout.counts[m], self.cfg.embed_dim)
+        else:
+            tokens = {m: self.encoders[m](raw[m]) for m in MODALITIES}
 
         # 2. positional embeddings then the weight indicator, eqs. (16)-(19)
         tokens = self.pos(tokens)

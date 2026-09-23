@@ -335,3 +335,73 @@ def test_unavailable_modality_yields_zeros_without_touching_disk(tmp_path):
     assert absent["availability"].tolist()[2] == 0.0
     batch = torch.utils.data.default_collate([present, absent])
     assert batch["radar"].shape[0] == 2
+
+
+def test_disabled_modality_has_zero_influence_and_skipping_is_equivalent():
+    """The scientific foundation of the modality-ablation experiment.
+
+    Two properties must hold for a configuration expressed by forcing the eq. (3)
+    availability vector to be a faithful ablation rather than an approximation:
+
+    1. a modality marked unavailable must have EXACTLY zero influence on the
+       logits -- otherwise 'GPS + Radar' is silently still seeing the camera;
+    2. skipping that modality's encoder must change nothing -- otherwise the
+       latency and FLOPs reported per configuration describe a different model
+       from the one that produced the accuracy.
+    """
+    from amber.ablation import enabled_mask, restrict_availability
+    from amber.model import AMBER
+
+    B = 3
+    base = {"image": torch.randn(B, 5, 3, 64, 64),
+            "lidar": torch.randn(B, 5, 1, 64, 64),
+            "radar": torch.randn(B, 5, 2, 64, 64),
+            "beam": torch.randn(B, 4, 2),
+            "gps": torch.randn(B, 2, 2),
+            "availability": torch.ones(B, len(MODALITIES))}
+    batch = restrict_availability(base, enabled_mask(["gps", "radar"]))
+
+    # the mask removed exactly the other three modalities
+    assert batch["availability"][0].tolist() == [
+        1.0 if m in ("gps", "radar") else 0.0 for m in MODALITIES]
+
+    torch.manual_seed(0)
+    cfg = ModelConfig(pretrained=False, pool_hw=(2, 2))
+    model = AMBER(cfg).eval()
+    with torch.no_grad():
+        ref = model(batch, use_cma=False).logits
+        # perturbing the disabled modalities must not move the output at all
+        loud = {**batch, "image": torch.randn_like(batch["image"]) * 50,
+                "lidar": torch.randn_like(batch["lidar"]) * 50,
+                "beam": torch.randn_like(batch["beam"]) * 50}
+        assert torch.equal(ref, model(loud, use_cma=False).logits)
+        # while perturbing an enabled one must
+        louder = {**batch, "radar": torch.randn_like(batch["radar"]) * 50}
+        assert not torch.allclose(ref, model(louder, use_cma=False).logits)
+
+    # encoder skipping is numerically equivalent
+    torch.manual_seed(0)
+    skipped = AMBER(ModelConfig(pretrained=False, pool_hw=(2, 2),
+                                skip_unavailable_encoders=True)).eval()
+    with torch.no_grad():
+        assert torch.allclose(ref, skipped(batch, use_cma=False).logits, atol=1e-6)
+
+
+def test_restriction_cannot_conjure_an_unavailable_modality():
+    """A configuration may only remove modalities, never add them.
+
+    Scenario 34 genuinely has no radar for ~60% of its samples and the official
+    test split has no beam history at all, so 'GPS + Radar' must not pretend
+    radar exists where it does not -- that would silently feed the model zeros
+    while telling it the modality is present.
+    """
+    from amber.ablation import enabled_mask, restrict_availability
+
+    B = 2
+    natural = torch.zeros(B, len(MODALITIES))
+    natural[:, MODALITIES.index("gps")] = 1.0          # only GPS really present
+    out = restrict_availability({"availability": natural},
+                                enabled_mask(["gps", "radar", "image"]))
+    assert out["availability"][:, MODALITIES.index("radar")].sum() == 0
+    assert out["availability"][:, MODALITIES.index("image")].sum() == 0
+    assert out["availability"][:, MODALITIES.index("gps")].sum() == B

@@ -23,6 +23,8 @@ import numpy as np
 import torch
 from torch.utils.data import DataLoader, Subset
 
+from .ablation import (config_label, enabled_mask, parse_modalities,
+                        restrict_availability)
 from .config import MODALITIES, ModelConfig, TrainConfig, as_dict
 from .dataset import AmberDataset, apply_modality_dropout
 from .losses import AmberLoss
@@ -65,12 +67,18 @@ def make_loader(dataset, batch_size: int, shuffle: bool, workers: int,
 
 @torch.no_grad()
 def run_eval(model: AMBER, loader: DataLoader, device: torch.device,
-             scenarios: list[str], train_cfg: TrainConfig) -> dict:
-    """Score a split. Rows with no label (target < 0) are skipped."""
+             scenarios: list[str], train_cfg: TrainConfig,
+             modality_mask: torch.Tensor | None = None) -> dict:
+    """Score a split. Rows with no label (target < 0) are skipped.
+
+    `modality_mask` restricts which modalities the model may use, for the
+    modality-ablation experiment. It must be the same mask used during training.
+    """
     model.eval()
     logits, targets, groups = [], [], []
     for batch in loader:
         batch = to_device(batch, device)
+        batch = restrict_availability(batch, modality_mask)
         out = model(batch, use_cma=False)
         logits.append(out.logits.float().cpu())
         targets.append(batch["target"].cpu())
@@ -93,6 +101,7 @@ def train(args) -> None:
         pool_hw=(args.pool, args.pool),
         temporal_pool=args.temporal_pool,
         pretrained=not args.no_pretrained,
+        skip_unavailable_encoders=args.skip_unavailable_encoders,
     )
     train_cfg = TrainConfig(
         batch_size=args.batch_size, lr=args.lr, epochs=args.epochs,
@@ -108,16 +117,25 @@ def train(args) -> None:
     dropout_probs = [beam_p if m == "beam" else args.modality_dropout
                      for m in MODALITIES]
 
+    # Modality-ablation restriction. None means "use whatever each sample has",
+    # i.e. ordinary AMBER training.
+    enabled = parse_modalities(args.modalities) if args.modalities else None
+    modality_mask = enabled_mask(enabled) if enabled else None
+    if enabled:
+        print(f"modality configuration: {config_label(enabled)}  "
+              f"({', '.join(enabled)})")
+
     torch.manual_seed(train_cfg.seed)
     np.random.seed(train_cfg.seed)
     device = pick_device(train_cfg.device)
 
     index_dir = Path(args.index_dir)
-    splits = {name: AmberDataset(index_dir, name, model_cfg)
+    splits = {name: AmberDataset(index_dir, name, model_cfg, modalities=enabled)
               for name in ("train", "val", "adaptation")}
     # the 'test' split exists only once the official release is in place
     try:
-        splits["test"] = AmberDataset(index_dir, "test", model_cfg)
+        splits["test"] = AmberDataset(index_dir, "test", model_cfg,
+                                      modalities=enabled)
     except ValueError:
         print("note: 'test' split is empty (official test release not present)")
 
@@ -131,6 +149,8 @@ def train(args) -> None:
                                         train_cfg.num_workers, args.limit_eval)
 
     model = AMBER(model_cfg).to(device)
+    if modality_mask is not None:
+        modality_mask = modality_mask.to(device)
     n_params = sum(p.numel() for p in model.parameters())
     print(f"device={device}  params={n_params/1e6:.1f}M  "
           f"tokens/modality={model.layout.counts}  N={2*model.layout.total}")
@@ -183,6 +203,9 @@ def train(args) -> None:
         for batch in loaders["train"]:
             batch = apply_modality_dropout(batch, dropout_probs, generator)
             batch = to_device(batch, device)
+            # restrict before the model sees it, so training and evaluation
+            # observe exactly the same modality set
+            batch = restrict_availability(batch, modality_mask)
             # unlabelled rows cannot contribute to the focal term
             if (batch["target"] < 0).any():
                 keep = batch["target"] >= 0
@@ -205,7 +228,8 @@ def train(args) -> None:
             seen += n
 
         means = {k: v / max(seen, 1) for k, v in running.items()}
-        val = run_eval(model, loaders["val"], device, splits["val"].scenarios, train_cfg)
+        val = run_eval(model, loaders["val"], device, splits["val"].scenarios,
+                       train_cfg, modality_mask)
         val_top1 = val.get("overall", {}).get("top1", float("nan"))
 
         row = {"epoch": epoch, "lr": scheduler.get_last_lr()[0],
@@ -254,7 +278,8 @@ def train(args) -> None:
     for name in ("val", "adaptation", "test"):
         if name in loaders:
             results[name] = run_eval(model, loaders[name], device,
-                                     splits[name].scenarios, train_cfg)
+                                     splits[name].scenarios, train_cfg,
+                                     modality_mask)
     (run_dir / "metrics.json").write_text(json.dumps(results, indent=2))
 
     print("\nfinal metrics")
@@ -275,17 +300,23 @@ def evaluate_only(args) -> None:
     model_cfg = ModelConfig(**saved["model"])
     train_cfg = TrainConfig(**saved["train"])
     model = AMBER(model_cfg).to(device)
+    enabled = parse_modalities(args.modalities) if args.modalities else None
+    modality_mask = enabled_mask(enabled, device) if enabled else None
+    if enabled:
+        print(f"modality configuration: {config_label(enabled)}")
     model.load_state_dict(payload["model"])
 
     results = {}
     for name in args.splits:
         try:
-            ds = AmberDataset(Path(args.index_dir), name, model_cfg)
+            ds = AmberDataset(Path(args.index_dir), name, model_cfg,
+                              modalities=enabled)
         except ValueError as exc:
             print(f"skipping {name}: {exc}")
             continue
         loader = make_loader(ds, train_cfg.batch_size, False, args.workers, args.limit_eval)
-        results[name] = run_eval(model, loader, device, ds.scenarios, train_cfg)
+        results[name] = run_eval(model, loader, device, ds.scenarios, train_cfg,
+                                 modality_mask)
 
     print(json.dumps(results, indent=2))
 
@@ -311,6 +342,11 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--temporal-pool", default=ModelConfig.temporal_pool,
                    choices=["concat", "mean", "tokens"])
     p.add_argument("--no-pretrained", action="store_true")
+    p.add_argument("--skip-unavailable-encoders", action="store_true",
+                   help="do not run a modality's encoder when it is unavailable for "
+                        "the whole batch. Numerically equivalent (the eq. 30 fusion "
+                        "mask already gives it zero influence) and makes measured "
+                        "latency/FLOPs reflect a configuration's real cost.")
     p.add_argument("--seed", type=int, default=TrainConfig.seed)
     p.add_argument("--workers", type=int, default=TrainConfig.num_workers)
     p.add_argument("--device", default="auto", choices=["auto", "cpu", "cuda", "mps"])
@@ -321,6 +357,10 @@ def build_parser() -> argparse.ArgumentParser:
                    help="continue from runs/<name>/last.pt if it exists")
     p.add_argument("--checkpoint", default=None)
     p.add_argument("--splits", nargs="+", default=["val", "adaptation", "test"])
+    p.add_argument("--modalities", nargs="+", default=None,
+                   help="restrict the model to these modalities, for the modality "
+                        "ablation (e.g. --modalities gps radar). Accepts 'camera' "
+                        "for 'image'. Default: every modality each sample has.")
     return p
 
 

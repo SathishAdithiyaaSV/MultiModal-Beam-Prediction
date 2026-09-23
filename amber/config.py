@@ -47,6 +47,14 @@ class ModelConfig:
     # both require. See amber/encoders.py for why this needs a choice at all.
     temporal_pool: str = "concat"      # concat | mean | tokens      [UNSPECIFIED]
 
+    # Skip a modality's encoder entirely when it is unavailable for every sample
+    # in the batch. Verified numerically equivalent: the eq. (30) fusion mask
+    # already gives an unavailable modality exactly zero influence on the logits,
+    # so this only avoids pushing zeros through a ResNet. Off by default so
+    # ordinary training is unchanged; the modality-ablation experiment turns it on
+    # to measure honest per-configuration latency and FLOPs.
+    skip_unavailable_encoders: bool = False
+
     # ---- modality-weight indicator, eq. (18)
     modality_temperature: float = 1.0  # tau_mod                     [UNSPECIFIED]
 

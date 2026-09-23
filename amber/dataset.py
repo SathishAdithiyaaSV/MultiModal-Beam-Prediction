@@ -45,6 +45,7 @@ class AmberDataset(Dataset):
 
     def __init__(self, index_dir: str | Path, split: str | list[str],
                  cfg: ModelConfig, root: str | Path | None = None,
+                 modalities: Sequence[str] | None = None,
                  standardise_images: bool = True):
         self.index_dir = Path(index_dir)
         self.root = Path(root) if root is not None else self.index_dir.parents[2]
@@ -68,6 +69,15 @@ class AmberDataset(Dataset):
         self.lidar_cols = [f"lidar_bev_{i}" for i in range(1, cfg.window + 1)]
         self.radar_cols = [f"radar_{i}" for i in range(1, cfg.window + 1)]
         self.beam_cols = [f"beam_hist_{i}" for i in range(1, cfg.window)]
+        # Modality-ablation restriction. A disabled modality is neither read from
+        # disk nor marked available, which for the cheap configurations removes
+        # most of the per-sample I/O -- a GPS-only configuration would otherwise
+        # still load ~4 MB of image/LiDAR/radar tensors per sample only for the
+        # model to ignore them.
+        self.enabled = set(MODALITIES) if modalities is None else set(modalities)
+        unknown = self.enabled - set(MODALITIES)
+        if unknown:
+            raise ValueError(f"unknown modalities {sorted(unknown)}")
         self._shapes = self._probe_shapes()
 
     def __len__(self) -> int:
@@ -102,7 +112,7 @@ class AmberDataset(Dataset):
     def _load_images(self, row) -> torch.Tensor:
         # Unavailable modality: return zeros rather than touching the disk. The
         # files genuinely do not exist for these samples.
-        if not row["m_image"]:
+        if not row["m_image"] or "image" not in self.enabled:
             shape = self._shapes["image"] or (3, 256, 256)
             return torch.zeros(len(self.image_cols), *shape)
         frames = []
@@ -116,7 +126,7 @@ class AmberDataset(Dataset):
         return torch.stack(frames)
 
     def _load_maps(self, row, columns, key) -> torch.Tensor:
-        if not row[f"m_{key}"]:
+        if not row[f"m_{key}"] or key not in self.enabled:
             shape = self._shapes[key] or ((1, 256, 256) if key == "lidar" else (2, 256, 256))
             return torch.zeros(len(columns), *shape)
         return torch.stack([torch.from_numpy(
@@ -146,7 +156,9 @@ class AmberDataset(Dataset):
             "radar": self._load_maps(row, self.radar_cols, "radar"),
             "gps": self._load_gps(row),
             "beam": self._load_beam_history(row),
-            "availability": torch.tensor([float(row[c]) for c in MASK_COLS]),
+            "availability": torch.tensor(
+                [float(row[c]) * (m in self.enabled)
+                 for c, m in zip(MASK_COLS, MODALITIES)]),
             "target": torch.tensor(int(row["beam"]), dtype=torch.long),
             "index": torch.tensor(i, dtype=torch.long),
         }
