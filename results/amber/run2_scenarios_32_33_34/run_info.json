@@ -1,0 +1,27 @@
+{
+  "run": "run2_scenarios_32_33_34",
+  "description": "AMBER trained on development scenarios 32, 33 and 34, after scenario 34 was re-downloaded and its unit2 GPS added.",
+  "PROVENANCE WARNING": "config.json in this directory records epochs=15, which is WRONG. The learning-rate trajectory proves the cosine schedule was sized for 20 epochs: the logged lr at the end of epoch 17 is 5.455e-06, which matches a 20-epoch schedule exactly (5.455e-06) and is impossible for a 15- or 17-epoch one (both give 0). The run completed 17 of 20 epochs, then a later invocation with --epochs 15 and --resume trained nothing (it was already past 15) but overwrote config.json on the way to re-running the final metrics.",
+  "epochs_scheduled": 20,
+  "epochs_completed": 17,
+  "lr_at_final_epoch": 5.45451283911591e-06,
+  "note_on_truncation": "The schedule did not fully anneal (final lr 5.5e-06 rather than ~0). Immaterial here: the best epoch was 12 and epochs 13-17 did not beat it, so the model had plateaued.",
+  "best_epoch": 12,
+  "train_hours": 3.15,
+  "val": {
+    "top1": 0.4345,
+    "top3": 0.7862,
+    "top5": 0.9113,
+    "dba": 0.8611,
+    "dba_y1": 0.8,
+    "dba_y2": 0.8722,
+    "dba_y3": 0.9113,
+    "n": 2198.0
+  },
+  "eval_splits": {
+    "val": "2198 labelled, scenarios 32/33/34 -- primary",
+    "adaptation": "100 labelled, scenarios 31/32/33 -- secondary",
+    "test": "625 UNLABELLED, predictions only"
+  },
+  "known_result": "Scenario 31 collapses on adaptation (Top-1 0.04, DBA 0.156) against 0.85-0.91 elsewhere. Expected, not a bug: scenario 31 has zero training samples and is the only straight-road geometry. Scenarios 32 and 33 on the same split score 0.56 and 0.44, which rules out the split, the preprocessing and the absent beam history as causes."
+}
