@@ -248,6 +248,9 @@ def train(args) -> None:
             best = val_top1
             torch.save({"model": model.state_dict(),
                         "config": {**as_dict(model_cfg, train_cfg),
+                                   # the enabled subset, distinct from the global
+                                   # MODALITIES list that as_dict already stores
+                                   "enabled_modalities": list(enabled) if enabled else None,
                                    "dropout_probs": dict(zip(MODALITIES, dropout_probs))},
                         # kept separately so amber.predict can rebuild the exact
                         # architecture without being told the flags again

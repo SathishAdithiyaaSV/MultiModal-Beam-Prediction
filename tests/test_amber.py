@@ -459,3 +459,35 @@ def test_predict_accepts_a_modality_restriction():
     # the restriction must reach both the dataset and the batch
     assert "modalities=modalities" in src
     assert "restrict_availability" in src
+
+
+def test_dba_and_topk_decompose_per_sample():
+    """DBA must be an exact average of per-sample terms.
+
+    The oracle-routing analysis scores routed mixtures of two models by combining
+    their per-sample scores, never re-running anything. That is only valid if the
+    aggregate metrics decompose exactly, so this pins it against the repository's
+    own aggregate implementations.
+    """
+    import numpy as np
+    import pandas as pd
+
+    from amber.metrics import dba_score, topk_accuracy
+
+    rng = np.random.default_rng(0)
+    n, k = 500, 64
+    logits = torch.tensor(rng.normal(size=(n, k)), dtype=torch.float32)
+    targets = torch.tensor(rng.integers(0, k, n))
+
+    aggregate, _ = dba_score(logits, targets, k=3, delta=5.0)
+    ranked = logits.topk(3, dim=1).indices.numpy()
+    true = targets.numpy()[:, None]
+    best = np.minimum.accumulate(np.abs(ranked - true) / 5.0, axis=1).clip(max=1.0)
+    per_sample = (1.0 - best).mean(axis=1)
+
+    # float32 aggregation vs float64 per-sample, so exact to single precision
+    assert abs(aggregate - per_sample.mean()) < 1e-6
+
+    tk = topk_accuracy(logits, targets, (1, 3))
+    assert abs(tk[1] - (ranked[:, 0] == true[:, 0]).mean()) < 1e-9
+    assert abs(tk[3] - (ranked[:, :3] == true).any(axis=1).mean()) < 1e-9
