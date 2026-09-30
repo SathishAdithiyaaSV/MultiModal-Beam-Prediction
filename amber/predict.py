@@ -31,6 +31,8 @@ import pandas as pd
 import torch
 import torch.nn.functional as F
 
+from .ablation import (config_label, enabled_mask, parse_modalities,
+                        restrict_availability)
 from .config import ModelConfig, TrainConfig
 from .dataset import AmberDataset
 from .metrics import evaluate_by_group
@@ -54,13 +56,23 @@ def load_checkpoint(path: Path, device: torch.device) -> tuple[AMBER, ModelConfi
 @torch.no_grad()
 def predict_split(model: AMBER, index_dir: Path, split: str, cfg: ModelConfig,
                   train_cfg: TrainConfig, device: torch.device,
-                  batch_size: int, workers: int, topk: int) -> pd.DataFrame:
-    dataset = AmberDataset(index_dir, split, cfg)
+                  batch_size: int, workers: int, topk: int,
+                  modalities: tuple[str, ...] | None = None) -> pd.DataFrame:
+    """Predict one split, optionally restricted to a modality configuration.
+
+    `modalities` MUST match what the checkpoint was trained with. Without it a
+    modality-ablation checkpoint would be evaluated against whatever each sample
+    happens to have, silently scoring a different configuration from the one
+    that was trained.
+    """
+    dataset = AmberDataset(index_dir, split, cfg, modalities=modalities)
+    mask = enabled_mask(modalities, device) if modalities else None
     loader = make_loader(dataset, batch_size, shuffle=False, workers=workers)
 
     all_logits, all_targets = [], []
     for batch in loader:
-        out = model(to_device(batch, device))
+        batch = restrict_availability(to_device(batch, device), mask)
+        out = model(batch)
         all_logits.append(out.logits.float().cpu())
         all_targets.append(batch["target"].cpu())
     logits = torch.cat(all_logits)
@@ -108,6 +120,10 @@ def main() -> None:
     p.add_argument("--workers", type=int, default=2)
     p.add_argument("--topk", type=int, default=5)
     p.add_argument("--device", default="auto", choices=["auto", "cpu", "cuda", "mps"])
+    p.add_argument("--modalities", nargs="+", default=None,
+                   help="restrict to these modalities; must match what the checkpoint "
+                        "was trained with (e.g. --modalities gps camera). Without it "
+                        "an ablation checkpoint is scored on the wrong configuration.")
     args = p.parse_args()
 
     device = pick_device(args.device)
@@ -115,13 +131,18 @@ def main() -> None:
     out_dir = args.out_dir or args.checkpoint.parent
     out_dir.mkdir(parents=True, exist_ok=True)
 
+    mods = parse_modalities(args.modalities) if args.modalities else None
     print(f"checkpoint {args.checkpoint}  device {device}  split {args.split!r}")
+    if mods:
+        print(f"modality configuration: {config_label(mods)}")
     frame, metrics = predict_split(model, args.index_dir, args.split, cfg, TrainConfig(),
-                                   device, args.batch_size, args.workers, args.topk)
+                                   device, args.batch_size, args.workers, args.topk,
+                                   modalities=mods)
 
-    pred_path = out_dir / f"predictions_{args.split}.csv"
+    suffix = f"_{'_'.join(mods)}" if mods else ""
+    pred_path = out_dir / f"predictions_{args.split}{suffix}.csv"
     frame.to_csv(pred_path, index=False)
-    sub_path = out_dir / f"submission_{args.split}.csv"
+    sub_path = out_dir / f"submission_{args.split}{suffix}.csv"
     frame[["top1_beam"]].rename(columns={"top1_beam": "beam"}).to_csv(sub_path, index=False)
 
     print(f"\n{len(frame)} predictions -> {pred_path}")
@@ -131,7 +152,8 @@ def main() -> None:
     print(frame.groupby("scenario").size().to_string())
 
     if metrics is not None:
-        (out_dir / f"metrics_{args.split}.json").write_text(json.dumps(metrics, indent=2))
+        (out_dir / f"metrics_{args.split}{suffix}.json").write_text(
+            json.dumps(metrics, indent=2))
         print(f"\nmetrics ({args.split}):")
         for group, vals in metrics.items():
             print(f"  {group:<12} " + "  ".join(f"{k}={v:.4f}" for k, v in vals.items()))

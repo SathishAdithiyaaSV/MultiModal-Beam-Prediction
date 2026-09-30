@@ -1,0 +1,16 @@
+{
+  "objective": "maximise DBA, minimise forward GFLOPs per sample",
+  "frontier": [
+    "GPS",
+    "GPS + LiDAR",
+    "GPS + Radar",
+    "GPS + Radar + LiDAR",
+    "GPS + Camera"
+  ],
+  "dominated": [
+    "GPS + Radar + Camera",
+    "GPS + Radar + Camera + LiDAR",
+    "GPS + Camera + LiDAR"
+  ],
+  "note": "The frontier ends at GPS + Camera: every configuration costing more has lower DBA, so the full 4-modality model is Pareto-dominated."
+}

@@ -1,0 +1,25 @@
+Configuration,split,scenario,n,Top-1,Top-3,DBA
+GPS,val,scenario32,600,0.245,0.4867,0.6209
+GPS,val,scenario33,750,0.376,0.688,0.7944
+GPS,val,scenario34,848,0.3243,0.6392,0.7497
+GPS,adaptation,scenario31,50,0.04,0.14,0.264
+GPS,adaptation,scenario32,25,0.36,0.6,0.68
+GPS,adaptation,scenario33,25,0.44,0.84,0.872
+GPS + Radar,val,scenario32,600,0.33,0.635,0.7491
+GPS + Radar,val,scenario33,750,0.3973,0.728,0.8204
+GPS + Radar,val,scenario34,848,0.3278,0.6344,0.7645
+GPS + Radar,adaptation,scenario31,50,0.0,0.04,0.0893
+GPS + Radar,adaptation,scenario32,25,0.4,0.76,0.84
+GPS + Radar,adaptation,scenario33,25,0.44,0.76,0.872
+GPS + Radar + Camera,val,scenario32,600,0.415,0.7933,0.866
+GPS + Radar + Camera,val,scenario33,750,0.4587,0.7973,0.865
+GPS + Radar + Camera,val,scenario34,848,0.4493,0.8432,0.9002
+GPS + Radar + Camera,adaptation,scenario31,50,0.02,0.02,0.0867
+GPS + Radar + Camera,adaptation,scenario32,25,0.52,0.8,0.9147
+GPS + Radar + Camera,adaptation,scenario33,25,0.56,0.84,0.9147
+GPS + Radar + Camera + LiDAR,val,scenario32,600,0.41,0.81,0.8636
+GPS + Radar + Camera + LiDAR,val,scenario33,750,0.444,0.788,0.8605
+GPS + Radar + Camera + LiDAR,val,scenario34,848,0.4575,0.8302,0.8982
+GPS + Radar + Camera + LiDAR,adaptation,scenario31,50,0.0,0.0,0.0267
+GPS + Radar + Camera + LiDAR,adaptation,scenario32,25,0.72,0.84,0.928
+GPS + Radar + Camera + LiDAR,adaptation,scenario33,25,0.6,0.92,0.9253

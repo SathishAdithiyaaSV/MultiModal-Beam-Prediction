@@ -405,3 +405,57 @@ def test_restriction_cannot_conjure_an_unavailable_modality():
     assert out["availability"][:, MODALITIES.index("radar")].sum() == 0
     assert out["availability"][:, MODALITIES.index("image")].sum() == 0
     assert out["availability"][:, MODALITIES.index("gps")].sum() == B
+
+
+def test_difficulty_metrics_on_hand_checkable_vectors():
+    """Beam-ambiguity measures, verified against cases with known answers.
+
+    These feed the planned analysis of whether cheap modalities suffice on easy
+    samples, so a silent error here would misdirect the whole gate design.
+    """
+    import numpy as np
+
+    from amber.difficulty import difficulty_metrics
+
+    p = np.zeros((5, 64))
+    p[0] = 0.01; p[0, 10] = 1.0            # one dominant beam, best/second = 100
+    p[1] = 1.0                              # perfectly flat
+    p[2] = 0.01; p[2, 5] = 1.0; p[2, 6] = 0.5   # best exactly 2x second
+    p[3] = np.nan                           # unlabelled row, no finite bins
+    p[4] = 0.01; p[4, 0] = 1.0; p[4, 1] = np.nan   # a single corrupt bin
+    d = difficulty_metrics(p)
+
+    assert abs(d.margin_db[0] - 20.0) < 1e-6          # 10*log10(100)
+    assert abs(d.margin_db[1] - 0.0) < 1e-9           # flat -> no margin
+    assert abs(d.margin_db[2] - 3.0103) < 1e-3        # 10*log10(2)
+    assert abs(d.entropy_bits[1] - 6.0) < 1e-9        # flat -> log2(64) exactly
+    assert d.n_within_3db[0] == 1 and d.n_within_3db[1] == 64
+    assert d.n_within_10pct[1] == 64
+
+    # an all-NaN row must yield NaN rather than a plausible-looking number
+    assert np.isnan(d.margin_db[3]) and np.isnan(d.entropy_bits[3])
+    assert d.n_within_3db[3] == -1 and d.n_finite_beams[3] == 0
+
+    # a corrupt bin is ignored, not treated as a beam
+    assert d.n_finite_beams[4] == 63
+    assert d.n_within_3db[4] == 1
+
+
+def test_predict_accepts_a_modality_restriction():
+    """amber.predict must be able to score an ablation configuration.
+
+    Without --modalities it would evaluate a configuration's checkpoint against
+    whatever modalities each sample happens to have, silently reporting a
+    different configuration from the one that was trained.
+    """
+    import inspect
+
+    from amber import predict
+
+    sig = inspect.signature(predict.predict_split)
+    assert "modalities" in sig.parameters
+    assert "--modalities" in inspect.getsource(predict.main)
+    src = inspect.getsource(predict.predict_split)
+    # the restriction must reach both the dataset and the batch
+    assert "modalities=modalities" in src
+    assert "restrict_availability" in src
