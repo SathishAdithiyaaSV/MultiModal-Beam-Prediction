@@ -1,0 +1,56 @@
+{
+  "cheap_tier": "gps",
+  "expensive_tier": "gps_image",
+  "cost_ratio": 125,
+  "n_val": 2198,
+  "quadrants_top1_pct": {
+    "both_correct": 23.1,
+    "cheap_only": 8.9,
+    "expensive_only_escalation_pays": 22.9,
+    "neither": 45.0
+  },
+  "always_cheap": {
+    "top1": 0.3203,
+    "dba": 0.7298,
+    "gflops": 0.39
+  },
+  "always_expensive": {
+    "top1": 0.4604,
+    "dba": 0.8835,
+    "gflops": 48.24
+  },
+  "oracle": {
+    "top1": 0.5496,
+    "gflops": 11.36,
+    "escalated_frac": 0.229
+  },
+  "confidence_gate": {
+    "matches_expensive_top1": {
+      "escalated_frac": 0.89,
+      "gflops": 42.98,
+      "compute_saved": 0.11
+    },
+    "matches_expensive_dba": {
+      "escalated_frac": 0.87,
+      "gflops": 42.02,
+      "compute_saved": 0.13
+    },
+    "at_25pct": {
+      "top1": 0.3726,
+      "dba": 0.8199,
+      "gflops": 12.35
+    },
+    "at_50pct": {
+      "top1": 0.4081,
+      "dba": 0.8557,
+      "gflops": 24.31
+    }
+  },
+  "gate_signal_auc": {
+    "cheap_model_confidence": 0.6864,
+    "n_within_10pct_offline": 0.6331,
+    "margin_db_offline": 0.5932,
+    "entropy_bits_offline": 0.5913,
+    "spread_db_offline": 0.5458
+  }
+}

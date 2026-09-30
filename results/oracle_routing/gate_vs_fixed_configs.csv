@@ -1,0 +1,4 @@
+operating_point,Top-1,DBA,GFLOPs,n_fixed_configs_dominated,dominates
+gate @ 25% escalated,0.3726,0.8199,12.35,3,GPS + Radar + LiDAR; GPS + Radar; GPS + LiDAR
+gate @ 50% escalated,0.4081,0.8557,24.31,1,GPS + Radar + LiDAR
+gate @ 87% escalated,,0.8835,42.02,4,GPS + Radar + Camera; GPS + Radar + Camera + LiDAR; GPS + Camera + LiDAR; GPS + Radar + LiDAR

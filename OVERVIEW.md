@@ -5,10 +5,12 @@ All results obtained so far, with the caveats that qualify them.
 **Task.** Predict the best beam of a 64-beam codebook from a 5-step window of
 camera, LiDAR, radar and GPS. DeepSense6G 2022 Multi-Modal, scenarios 31–34.
 
-**Status.** Preprocessing complete. AMBER baseline trained. The eight-configuration
-modality ablation is complete and is the main result. A knowledge-distillation
-baseline has run on an earlier version of the data. The adaptive-routing
-contribution is not yet built — the ablation has just changed what it should be.
+**Status.** Preprocessing complete. AMBER baseline trained. The
+eight-configuration modality ablation is complete and is the main result. The
+oracle routing analysis is complete and has answered whether adaptive routing is
+worth pursuing — partly yes, with the limitation now located precisely in the
+gate signal. A knowledge-distillation baseline has run on an earlier version of
+the data.
 
 ---
 
@@ -163,7 +165,75 @@ configurations is the signal, not the individual values. And every configuration
 poor there (0.02–0.26 against 0.72–0.88 in-domain), so "generalises better" means
 less catastrophically bad. Validating this properly needs scenario 31's full release.
 
-## 6. Knowledge-distillation baseline (reference paper 4)
+## 6. Oracle routing analysis
+
+The experiment that decides whether the adaptive contribution exists. Validation
+split (n=2,198), the eight ablation checkpoints, no training. Verified first
+that the per-sample decomposition reproduces all eight ablation aggregates to
+four decimals.
+
+Tiers: **GPS** (0.39 GFLOPs, DBA 0.7298) escalating to **GPS + Camera**
+(48.24 GFLOPs, DBA 0.8835) — a 125× cost ratio.
+
+### Headroom exists
+
+| | Top-1 | GFLOPs |
+|---|---|---|
+| always cheap | 0.3203 | 0.39 |
+| always expensive | 0.4604 | 48.24 |
+| **oracle router** | **0.5496** | **11.36** |
+
+The oracle beats always-expensive by **+0.089 Top-1 at 24 % of its compute**,
+escalating 22.9 % of samples. Unachievable — it reads the ground truth — but it
+proves a good router would win substantially.
+
+Where the tiers agree: both correct 23.1 %, **escalation pays 22.9 %**,
+**escalation actively hurts 8.9 %**, **neither 45.0 %**.
+
+### The realisable gate captures little of it
+
+Escalating the least-confident samples on the cheap model's own output:
+
+| target | escalated | GFLOPs | compute saved |
+|---|---|---|---|
+| match always-expensive Top-1 | 89.0 % | 42.98 | 11 % |
+| match always-expensive DBA | 87.0 % | 42.02 | 13 % |
+
+Escalating ~88 % to save ~12 % is thin. The cause is signal quality: confidence
+gives AUC **0.686** for predicting that the cheap tier already suffices.
+
+### Two findings that change the plan
+
+**The difficulty-aware gate is dead.** Every beam-ambiguity measure scores
+*below* raw confidence — `n_within_10pct` 0.633, `margin_db` 0.593,
+`entropy_bits` 0.591, `spread_db` 0.546. They are target-derived, so they were
+the **ceiling** for that approach, and the ceiling sits beneath what confidence
+already gives free. This closes a specific item from the original plan.
+
+**The gate does beat most fixed configurations — just not the best one.**
+Compared against all eight rather than only GPS + Camera:
+
+| operating point | DBA | GFLOPs | dominates |
+|---|---|---|---|
+| gate @ 25 % escalated | 0.8199 | **12.35** | GPS+Radar, GPS+LiDAR, GPS+Radar+LiDAR |
+| gate @ 50 % escalated | 0.8557 | 24.31 | GPS+Radar+LiDAR |
+| gate @ 87 % escalated | 0.8835 | 42.02 | 4 of 8 |
+
+At 25 % escalation: **+0.017 DBA over GPS+Radar+LiDAR at 3.7× less compute**,
+**+0.041 DBA over GPS+Radar at 1.9× less**. The gate reaches operating points no
+fixed configuration can — which *is* the resource-efficiency claim, even though
+it does not match the single best configuration at equal accuracy.
+
+### Limitations
+
+45 % of samples are wrong under both tiers, which caps any routing gain. 8.9 %
+are hurt by escalation, consistent with the camera generalisation trap.
+Measured on `val`, in-domain by construction, so a gate tuned here may escalate
+the wrong way on the 48 % of the test split that is scenario 31.
+
+Detail: [results/oracle_routing/README.md](results/oracle_routing/README.md).
+
+## 7. Knowledge-distillation baseline (reference paper 4)
 
 Teacher / radar-only student / no-KD control, in `trainedNotebooks/trained_kd.ipynb`.
 
@@ -183,7 +253,7 @@ improve Top-5, Top-10 and MPR. And radar-only reaches 0.1244 Top-1 where §4's
 GPS-only reaches 0.3203 — consistent with radar being the weak modality, and a
 reason to reconsider whether a radar-only student is the right cheap comparator.
 
-## 7. Data-integrity findings
+## 8. Data-integrity findings
 
 Original diagnostic work, not available from the papers.
 
@@ -208,7 +278,7 @@ carries almost no information. `amber/difficulty.py` therefore also provides
 **Two files are truncated** rather than missing (`lidar_data_2163.ply`,
 `radar_data_3998.npy`); both are reported and skipped rather than aborting a run.
 
-## 8. What this implies for the research direction
+## 9. What this implies for the research direction
 
 The original framing — a cheap Radar + GPS tier escalating to Camera or LiDAR —
 **does not survive the ablation**: radar is nearly worthless and LiDAR adds little.
@@ -227,13 +297,18 @@ A second axis falls out of §5: escalating to camera is right in-domain and wron
 out-of-domain, so *when* to escalate may depend on domain familiarity rather than
 confidence alone.
 
-**The make-or-break question is still open:** can per-sample routing beat simply
-always using GPS + Camera? If not, there is no contribution. The next experiment
-answers it without any training — for each val sample, which configurations got it
-right, crossed with the difficulty measures, giving the oracle ceiling on how often
-GPS alone would have sufficed.
+**The make-or-break question is now answered, and the answer is partly yes**
+(§6). Against the single best fixed configuration the confidence gate is thin —
+~88 % escalation for ~12 % compute saved. Against the *other* six it wins
+clearly, reaching accuracy/compute points none of them can. And the oracle shows
+**+0.089 Top-1 at 24 % of the compute** is available, so the limitation is the
+gate signal rather than the premise.
 
-## 9. Where things stand
+That turns the next step into a concrete, bounded problem: **learn** a gate
+instead of thresholding confidence. The target is measured (AUC 0.686 → perfect),
+the ceiling is known, and difficulty features are already ruled out.
+
+## 10. Where things stand
 
 | Step | Status |
 |---|---|
@@ -243,11 +318,11 @@ GPS alone would have sufficed.
 | Baseline 5 — KD radar-only student | done, on stale data and its own protocol (§6) |
 | Baseline 1 — official GPS-only LSTM | not started |
 | Baselines 2, 3 — LSTM, TII Transformer | dropped when the project went AMBER-only |
-| Oracle routing analysis | next; prerequisites landed |
-| Adaptive cost-aware gate | gated on the oracle analysis |
-| Difficulty / marginal-utility analysis | tooling ready (`amber/difficulty.py`) |
+| Oracle routing analysis | done (§6) — headroom real, confidence gate weak |
+| Learned gate (replaces the confidence threshold) | next — the oracle bounds it |
+| Difficulty-aware gating | **ruled out** — every measure scores below confidence (§6) |
 
-## 10. Reproducing
+## 11. Reproducing
 
 ```bash
 python3 -m venv ~/.venvs/beamprep
@@ -257,9 +332,12 @@ PY=~/.venvs/beamprep/bin/python bash preprocessing_amber/run_preprocessing.sh
 
 Then on Kaggle: `notebooks/amber_baseline.ipynb` for §3,
 `notebooks/modality_ablation_part{1,2}.ipynb` plus
-`notebooks/modality_ablation_report.ipynb` for §4.
+`notebooks/modality_ablation_report.ipynb` for §4, and
+`notebooks/oracle_routing.ipynb` for §6.
 
 Full detail: [README.md](README.md) for preprocessing and the data findings,
 [results/amber/README.md](results/amber/README.md) for the baseline runs,
 [results/modality_ablation/README.md](results/modality_ablation/README.md) for the
-ablation.
+ablation, and
+[results/oracle_routing/README.md](results/oracle_routing/README.md) for the
+routing analysis.

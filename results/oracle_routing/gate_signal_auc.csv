@@ -1,0 +1,6 @@
+signal,AUC
+cheap_model_confidence,0.6864
+n_within_10pct_offline,0.6331
+margin_db_offline,0.5932
+entropy_bits_offline,0.5913
+spread_db_offline,0.5458

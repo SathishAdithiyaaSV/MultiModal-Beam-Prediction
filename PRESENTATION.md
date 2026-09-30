@@ -239,25 +239,104 @@ depend on domain familiarity, not just confidence.
 
 ---
 
-## 13 · The open question
+## 13 · The question answered — headroom is real
 
-### Can per-sample routing beat simply always using GPS + Camera?
+**Can per-sample routing beat always using GPS + Camera?**
 
-If not, **there is no contribution.** This is not yet answered.
+No training needed: for each of the 2,198 validation samples, which of the 8
+configurations got it right?
 
-The next experiment answers it with **no training**: for each of the 2,198
-validation samples, which of the 8 configurations got it right? That gives
+| | Top-1 | GFLOPs |
+|---|---|---|
+| always cheap (GPS) | 0.3203 | 0.39 |
+| always expensive (GPS + Camera) | 0.4604 | 48.24 |
+| **oracle router** | **0.5496** | **11.36** |
 
-- the **oracle ceiling** — the best any router could do
-- a **realisable gate** using only the cheap model's own confidence
-- the **average compute** at which that gate matches always-GPS+Camera
+The oracle beats always-expensive by **+0.089 Top-1 at 24 % of its compute**,
+escalating only 22.9 % of samples.
 
-**What this means.** We find out whether the idea works before building it.
-Twenty minutes of GPU, not weeks of engineering.
+**What this means.** A good router would win substantially. The premise is sound
+— the opportunity is measurably there.
 
 ---
 
-## 14 · Honest limitations
+## 14 · But confidence cannot capture it
+
+Escalating the least-confident samples, using only the cheap model's own output:
+
+| target | escalated | compute saved |
+|---|---|---|
+| match always-expensive Top-1 | **89 %** | 11 % |
+| match always-expensive DBA | **87 %** | 13 % |
+
+Escalating ~88 % of samples to save ~12 % of compute.
+
+**Why:** confidence gives **AUC 0.686** for predicting "the cheap tier already
+suffices".
+
+Where the tiers agree — **45 % of samples are wrong under both**, and
+**8.9 % are actively *hurt* by escalating**.
+
+**What this means.** The bottleneck is not the idea, it is the **gate signal**.
+And the oracle/confidence gap is now a measured target rather than a guess.
+
+---
+
+## 15 · Two results that redirect the work
+
+**1. The difficulty-aware gate is dead.**
+
+| signal | AUC |
+|---|---|
+| cheap model confidence | **0.686** |
+| n_within_10pct *(offline)* | 0.633 |
+| margin_db *(offline)* | 0.593 |
+| entropy_bits *(offline)* | 0.591 |
+
+Every beam-ambiguity measure scores **below raw confidence** — and they are
+computed from the target, so they were the *ceiling* for that approach.
+
+**What this means.** A specific item from the original plan is closed, cheaply.
+Don't build it.
+
+---
+
+## 16 · The gate beats 6 of the 8 fixed configurations
+
+The notebook compared only against the *best* one. Against all eight, the gate
+dominates — better DBA **and** fewer GFLOPs — 6 of them at one
+operating point or another. Only two are never dominated: **GPS** (nothing beats
+it on cost) and **GPS + Camera** (the gate's own endpoint).
+
+At 25 % escalation:
+
+| | DBA | GFLOPs |
+|---|---|---|
+| **gate @ 25 % escalated** | **0.8199** | **12.35** |
+| GPS + Radar + LiDAR | 0.8025 | 46.23 |
+| GPS + Radar | 0.7794 | 23.57 |
+| GPS + LiDAR | 0.7770 | 23.05 |
+
+At 25 % escalation the gate is **+0.017 DBA over GPS+Radar+LiDAR at 3.7× less
+compute**, and **+0.041 DBA over GPS+Radar at 1.9× less**.
+
+**What this means.** Routing reaches accuracy/compute points **no fixed
+configuration can** — which *is* the resource-efficiency claim. It just does not
+match the single best configuration at equal accuracy. Framed against the
+frontier rather than against one point, the contribution holds.
+
+*Full dominance table:
+[results/oracle_routing/gate_vs_fixed_configs.csv](results/oracle_routing/gate_vs_fixed_configs.csv)*
+
+### The next step, now concrete
+
+**Learn** a gate instead of thresholding confidence: predict "will GPS suffice"
+from the cheap model's features. Target measured (0.686 → perfect), ceiling
+known, difficulty features already ruled out.
+
+---
+
+## 17 · Honest limitations
 
 - **10 epochs**, not to convergence. Best epochs were 8–10, so the ranking is
   probably stable, but absolute numbers would rise.
@@ -270,10 +349,14 @@ Twenty minutes of GPU, not weeks of engineering.
 - **Not comparable to the paper** (0.6415 Top-1): it trains on all four
   scenarios including scenario 31's separate release, and uses a random split
   that leaks temporally adjacent frames.
+- **Routing measured on validation only** — in-domain by construction. A gate
+  tuned here may escalate the wrong way on the 48 % of the test split that is
+  the unseen scenario.
+- **45 % of samples are wrong under both tiers**, which caps any routing gain.
 
 ---
 
-## 15 · Where things stand
+## 18 · Where things stand
 
 | | |
 |---|---|
@@ -281,15 +364,17 @@ Twenty minutes of GPU, not weeks of engineering.
 | ✅ | AMBER baseline (Baseline 4) |
 | ✅ | Modality ablation, 8 configurations |
 | ✅ | KD radar-only student (Baseline 5) — stale data, own protocol |
-| 🔄 | Oracle routing analysis — **the decision point** |
-| ⬜ | Adaptive gate — conditional on the above |
+| ✅ | Oracle routing analysis — headroom real, confidence gate weak |
+| 🔄 | **Learned gate** — replaces the confidence threshold; oracle bounds it |
+| ❌ | Difficulty-aware gating — **ruled out**, scores below confidence |
 | ⬜ | Official GPS-only LSTM (Baseline 1) |
 | ⬜ | Scenario 31 full release — needed for the generalisation claim |
 
 ### The one-sentence summary
 
 *A two-modality model beats the full four-modality one at half the compute;
-GPS alone gets 83 % of the way at 0.4 % of the cost; and camera — the only
-expensive modality that pays — is also the one that fails on unseen
-environments.*
+GPS alone gets 83 % of the way at 0.4 % of the cost; camera — the only expensive
+modality that pays — is also the one that fails on unseen environments; and
+per-sample routing has real headroom (+0.089 Top-1 at a quarter of the compute)
+that simple confidence thresholding cannot reach.*
 
