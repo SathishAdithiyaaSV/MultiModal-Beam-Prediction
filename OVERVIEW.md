@@ -1,334 +1,265 @@
 # Project Overview — Multimodal mmWave Beam Prediction (AMBER)
 
-High-level summary of the work so far: what the raw dataset contains, what
-preprocessing was built, what the processed dataset holds, and what to put in
-front of an audience.
+All results obtained so far, with the caveats that qualify them.
 
-**Status: preprocessing and the AMBER model are implemented and verified.
-No training run completed yet.**
+**Task.** Predict the best beam of a 64-beam codebook from a 5-step window of
+camera, LiDAR, radar and GPS. DeepSense6G 2022 Multi-Modal, scenarios 31–34.
 
-- Task: predict the best beam of a **64-beam codebook** from multimodal sensing
-- Dataset: **DeepSense6G 2022 Multi-Modal Beam Prediction**, scenarios **31–34**
-- Preprocessing and architecture both follow **AMBER** (Wen et al.)
-- Three defects found in the public data release (see §6)
+**Status.** Preprocessing complete. AMBER baseline trained. The eight-configuration
+modality ablation is complete and is the main result. A knowledge-distillation
+baseline has run on an earlier version of the data. The adaptive-routing
+contribution is not yet built — the ablation has just changed what it should be.
 
 ---
 
-## 1. The problem in one paragraph
+## 1. Data
 
-A 60 GHz base station with 16 antennas and a 64-beam codebook serves a moving
-vehicle. Picking the right beam by exhaustive search is expensive, so instead we
-predict it from sensors the BS already has: a camera, a LiDAR, a radar, and the
-vehicle's GPS relayed over a sub-6 GHz control link. Each sample is a short
-window of history — 5 camera frames, 5 LiDAR sweeps, 5 radar cubes, 2 GPS
-positions, plus the 4 previously-used beams — and the label is the beam that
-actually maximised received power. The eventual research question is whether the
-expensive sensors (camera, LiDAR) can be activated only when genuinely needed,
-holding accuracy while cutting average sensing cost.
+Three official releases, 46 GB raw, preprocessed to 11 GB of tensors.
 
----
+| split | n | scenarios | role |
+|---|---|---|---|
+| `train` | 8,844 | 32, 33, 34 | fitting |
+| `val` | 2,198 | 32, 33, 34 | model selection, all reported metrics |
+| `adaptation` | 100 | 31, 32, 33 | secondary check; only source of scenario-31 numbers |
+| `test` | 625 | 31, 32, 33, 34 | **unlabelled** — predictions only, cannot be scored |
+| `excluded_nan_pwr` | 101 | 32, 33, 34 | corrupt labels, quarantined |
 
-## 2. What is in the raw dataset
+Modality availability on `train` (what the eq. 3 mask sees): image 1.000,
+lidar 1.000, radar **0.777**, beam 0.979, gps 1.000. Radar is short because
+scenario 34 ships radar for ~40 % of its samples and a sample needs all five
+consecutive frames.
 
-Two official releases, 25 GB. They were misnamed on disk (`Training_dataset` /
-`Testing_dataset`) and were renamed to what they actually are — the second is
-the small *adaptation* set, not a test set.
+**Two structural gaps.** Scenario 31 has **zero training samples** — it appears
+only in `adaptation` (50) and `test` (300) — and is the only straight-road
+geometry. And **48 % of the test split is scenario 31**, so nearly half of it is
+out-of-domain. Closing this needs the standalone scenario-31 release (7,012
+frames) the AMBER paper used.
 
-| On disk | Official name | Scenarios | Samples | Size |
+## 2. Preprocessing
+
+Per AMBER's specification: radar → 2-channel range-angle/range-velocity tensor
+under one joint min-max (no clutter removal); LiDAR → BEV count histogram capped
+at 5 per cell; camera → 256×256 cache, per-image standardisation; GPS → Cartesian
+metres relative to the base station, normalised on `train` only; plus the 4 past
+beam indices and a 5-element availability mask. Detail in [README.md](README.md).
+
+## 3. AMBER baseline
+
+| | run 1 | run 2 |
+|---|---|---|
+| trained on | scenarios 32, 33 | scenarios 32, 33, **34** |
+| train / val | 5,544 / 1,350 | 8,844 / 2,198 |
+| epochs | 20 of 20 | 17 of 20 |
+| Top-1 | 0.3852 | **0.4345** |
+| Top-3 | 0.7230 | **0.7862** |
+| Top-5 | — | **0.9113** |
+| DBA | 0.8338 | **0.8611** |
+
+Adding scenario 34 gained **+6.8 pp Top-1, +9.0 pp Top-3, +4.7 pp DBA** — it also
+introduced the crossroad geometry the model had never seen.
+
+**Error structure (run 2).** Median absolute beam error is **1**; 43.4 % exact,
+78.6 % within ±1 beam, 93.9 % within ±3. The model lands on or next to the right
+beam almost always, which is what the high DBA reflects.
+
+For reference the paper reports Top-1 0.6415 / Top-3 0.8907 / DBA 0.9294. **Not
+like-for-like:** it trains on all four scenarios including scenario 31's separate
+7,012-frame release, uses a random 80/20 split that leaks temporally adjacent
+frames, and keeps historical beams enabled.
+
+## 4. Modality ablation — the main result
+
+Eight configurations, each trained **independently from scratch** under a verified
+identical protocol (10 epochs, batch 16, lr 1e-4, pool 4, seed 2022, modality
+dropout 0, **historical beams disabled**), varying only which modalities the model
+may use. 8.2 GPU-hours total.
+
+| Configuration | Top-1 | Top-3 | Top-5 | DBA | Params (M) | GFLOPs |
+|---|---|---|---|---|---|---|
+| GPS + Camera | 0.4604 | 0.8139 | 0.9295 | 0.8835 | 26.7 | 48.2 | **Pareto**
+| GPS + Radar + Camera | 0.4431 | 0.8139 | 0.9327 | 0.8789 | 38.0 | 71.4 |
+| GPS + Radar + Camera + LiDAR | 0.4399 | 0.8103 | 0.9286 | 0.8759 | 49.4 | 94.1 |
+| GPS + Camera + LiDAR | 0.4377 | 0.7962 | 0.9177 | 0.8727 | 38.0 | 70.9 |
+| GPS + Radar + LiDAR | 0.3640 | 0.6984 | 0.8389 | 0.8025 | 27.9 | 46.2 | **Pareto**
+| GPS + Radar | 0.3521 | 0.6665 | 0.8103 | 0.7794 | 16.5 | 23.6 | **Pareto**
+| GPS + LiDAR | 0.3449 | 0.6547 | 0.8126 | 0.7770 | 16.5 | 23.1 | **Pareto**
+| GPS | 0.3203 | 0.6142 | 0.7502 | 0.7298 | 5.2 | 0.4 | **Pareto**
+
+### Four findings
+
+**1. GPS + Camera is the best configuration, and beats the full model at half the
+compute.** DBA 0.8835 / Top-1 0.4604 against the 4-modality model's 0.8759 /
+0.4399, for 48.2 against 94.1 GFLOPs. The Pareto frontier *ends* there:
+
+```
+  GPS  →  GPS + LiDAR  →  GPS + Radar  →  GPS + Radar + LiDAR  →  GPS + Camera
+```
+
+Everything costing more than GPS + Camera has lower DBA, so **the full multimodal
+model is Pareto-dominated by a two-modality one**.
+
+**2. Radar does not pay for itself.** GPS → GPS + Radar costs 23.2 GFLOPs for
++0.050 DBA, and adding radar *on top of* camera makes things worse (0.8835 →
+0.8789). GPS + LiDAR (0.7770) and GPS + Radar (0.7794) are within noise, so radar
+is no better than LiDAR as a cheap partner.
+
+**3. GPS alone is the real cheap tier: DBA 0.7298 at 0.39 GFLOPs** — 83 % of the
+full model's DBA for **0.4 % of its compute**, a 240× ratio. The most consequential
+number in the table.
+
+**4. Adding modalities is not monotonic.** Two (0.8835) > three (0.8789) > four
+(0.8759).
+
+### Incremental value over GPS + Radar
+
+| Configuration | ΔTop-1 | ΔDBA | ΔGFLOPs | DBA per GFLOP |
 |---|---|---|---|---|
-| `data/raw/development/` | `Multi_Modal` dev set | 32, 33, 34 | 11,143 | 24 GB |
-| `data/raw/adaptation/` | `Adaptation_dataset_multi_modal` | 31, 32, 33 | 100 | 1.5 GB |
-| `data/raw/test/` | `Multi_Modal_Test` | — | — | *to be added* |
+| GPS + Camera | +0.1083 | +0.1041 | +24.7 | 0.00422 |
+| GPS + Radar + Camera | +0.0910 | +0.0995 | +47.9 | 0.00208 |
+| GPS + Radar + Camera + LiDAR | +0.0878 | +0.0965 | +70.5 | 0.00137 |
+| GPS + Camera + LiDAR | +0.0856 | +0.0933 | +47.3 | 0.00197 |
+| GPS + Radar + LiDAR | +0.0119 | +0.0231 | +22.7 | 0.00102 |
+| GPS + LiDAR | -0.0072 | -0.0024 | -0.5 | 0.00459 |
+| GPS | -0.0318 | -0.0496 | -23.2 | 0.00214 |
 
-### Per-modality format (verified on disk, not assumed)
+Camera is worth **+0.104 DBA** against LiDAR's **+0.023** — a 4.5× margin.
 
-| Modality | File | Content |
-|---|---|---|
-| Camera | `image_<f>.jpg` | 960×540 RGB |
-| Radar | `radar_data_<f>.npy` | `(4, 256, 250)` complex64 — 4 RX antennas × 256 samples/chirp × 250 chirps |
-| LiDAR | `lidar_data_<f>.ply` | ASCII point cloud, 16k–18k points, `x,y,z` + intensity |
-| GPS (BS) | `gps_location.txt` | one static lat/lon per scenario |
-| GPS (vehicle) | `GPS_location_<f>.txt` | per-frame lat/lon |
-| Power | `mmWave_power_<f>.txt` | **64 floats — the beam power vector** |
-| Label | `unit1_beam` column | 1-indexed beam = `argmax(power) + 1` |
+### Corroboration
 
-### Raw file counts
+A cheaper measurement agrees. Masking one modality at a time on the *single* run-2
+model (`results/amber/run2_scenarios_32_33_34/preliminary_masking_ablation_val.csv`)
+gives: removing Camera −0.0965 Top-1, LiDAR −0.0159, GPS −0.0155, Radar −0.0132,
+BeamIdx −0.0105. Camera dominates by ~6×. That measures something different —
+how much one trained model leans on each input, not what a model trained without
+it achieves — so the agreement across three independent routes is meaningful.
 
-| Scenario | Camera | LiDAR | Radar | Power | Vehicle GPS |
-|---|---|---|---|---|---|
-| dev / 32 | 3,235 | 3,235 | 3,235 | 3,115 | 3,145 |
-| dev / 33 | 3,981 | 3,981 | 3,981 | 3,837 | 3,873 |
-| dev / 34 | 4,439 | **1,007** | **0** | **0** | **0** |
-| adapt / 31 | 243 | 243 | 243 | 50 | 100 |
-| adapt / 32 | 118 | 118 | 118 | 25 | 49 |
-| adapt / 33 | 125 | 125 | 125 | 25 | 50 |
+## 5. The camera generalisation trap
 
-Two structural facts worth internalising: **scenario 34 is badly incomplete**,
-and **scenario 31 exists only in the 100-sample adaptation set** — there is no
-scenario-31 training data anywhere in this release.
+The ranking on the **unseen** scenario 31 is almost exactly inverted, and the split
+is entirely explained by whether camera is used.
 
----
-
-## 3. What preprocessing was built
-
-Raw sensor data is unusable as-is: radar is a complex IQ cube, LiDAR is an
-unordered point list, and neither has a fixed shape a CNN can consume. The
-pipeline in `preprocessing_amber/` converts all five modalities into exactly the
-representations AMBER's encoders expect.
-
-| Modality | Transform | Output | AMBER eq. |
+| Configuration | seen (val 32/33/34) | unseen scenario 31 | camera |
 |---|---|---|---|
-| **Radar** | 2D FFT → range-angle and range-velocity maps, stacked as **2 channels of one tensor** with a **single joint** min-max. **No clutter removal.** | `(2,256,256)` float32 | 5–8 |
-| **LiDAR** | **Bird's-eye-view point-count histogram**, capped at 5 points/cell. No background model. | `(1,256,256)` float32 | 11 |
-| **Camera** | Resized cache; per-image mean/std standardisation at load time. No augmentation. | 256×256 RGB | 10 |
-| **GPS** | lat/lon → **Cartesian metres relative to the BS**, min-max normalised on `train` only | 4 floats | 12 |
-| **Beam history** | the **4 past beam indices** become an input modality | 4 ints | 13 |
-| **Availability** | 5-element mask `m = [mI, mL, mR, mB, mG]` from what is on disk | 5 bits | 3 |
+| GPS + Camera | 0.8828 | 0.0200 | yes |
+| GPS + Radar + Camera | 0.8771 | 0.0867 | yes |
+| GPS + Radar + Camera + LiDAR | 0.8741 | 0.0267 | yes |
+| GPS + Camera + LiDAR | 0.8714 | 0.0933 | yes |
+| GPS + Radar + LiDAR | 0.8023 | 0.1987 | no |
+| GPS + LiDAR | 0.7783 | 0.2240 | no |
+| GPS + Radar | 0.7780 | 0.0893 | no |
+| GPS | 0.7217 | 0.2640 | no |
 
-Stages: `audit_dataset.py` → `radar_ra_rv.py` → `lidar_bev.py` →
-`image_cache.py` → `build_index.py`, all driven by `run_preprocessing.sh`.
+Averaged: camera configurations score **0.8763** on seen scenarios and
+**0.0567** on the unseen one; camera-free ones **0.7701** and
+**0.1940**. **GPS alone is the best configuration on scenario 31**
+(0.2640), beating every camera configuration by 3–13×.
 
-### Engineering notes
+Reading: camera features are **site-specific** — a model can memorise how one
+intersection looks — while GPS, radar and LiDAR encode relative geometry that
+transfers. Camera buys the most in-domain accuracy and generalises the worst.
 
-- **Open3D was dropped.** No wheels for Python 3.14, so its two call sites became
-  a small PLY reader/writer plus `scipy.cKDTree`.
-- **torchvision was dropped** — AMBER applies no photometric augmentation, so PIL
-  suffices. `torch` is needed only for training.
-- Every stage is **resumable and idempotent**; re-running does only missing work.
-- Sources are **discovered from disk**, so the pipeline runs unchanged before and
-  after the official test set is added.
+**Caveats.** Scenario 31 is n=50, so the consistent ordering across all eight
+configurations is the signal, not the individual values. And every configuration is
+poor there (0.02–0.26 against 0.72–0.88 in-domain), so "generalises better" means
+less catastrophically bad. Validating this properly needs scenario 31's full release.
 
----
+## 6. Knowledge-distillation baseline (reference paper 4)
 
-## 4. What is in the processed dataset
+Teacher / radar-only student / no-KD control, in `trainedNotebooks/trained_kd.ipynb`.
 
-`data/processed_amber/`, 6.2 GB. Per-frame tensors plus a single **index CSV**
-that is the only thing training code needs to read — it resolves every modality
-path, carries the label, and defines the splits.
+| model | Top-1 | Top-5 | Top-10 | MPR |
+|---|---|---|---|---|
+| Teacher (multimodal) | 0.2867 | 0.8015 | 0.9044 | 0.9312 |
+| Student, without KD (radar only) | 0.1244 | 0.3459 | 0.5163 | 0.7225 |
+| Student, with KD (radar only) | 0.1207 | 0.3778 | 0.5637 | 0.7411 |
 
-```
-<source>/<scenario>/radar_ra_rv/*.npy     (2,256,256) float32 in [0,1]
-<source>/<scenario>/lidar_bev/*.npy       (1,256,256) float32 in [0,1]
-<source>/<scenario>/camera/*.jpg          256x256 RGB
-index/samples.csv                         11,243 rows x 41 cols
-index/beam_pwr.npy                        (11243, 64) float32
-index/gps_norm.json                       train-fit GPS min/max  <- apply this
-index/image_stats.csv                     per-frame channel mean/std
-index/split_summary.csv, meta.json
-```
+**Three reasons these are not comparable to §4.** It ran on the **earlier index**
+(train 5,544 / val 1,350 — before scenario 34), it is a self-contained
+implementation with its own dataset, model and loop at 128×128 rather than reusing
+`amber/`, and it reports MPR rather than DBA.
 
-### Index columns, grouped
+On its own terms: **KD did not improve Top-1** (0.1207 against 0.1244) but did
+improve Top-5, Top-10 and MPR. And radar-only reaches 0.1244 Top-1 where §4's
+GPS-only reaches 0.3203 — consistent with radar being the weak modality, and a
+reason to reconsider whether a radar-only student is the right cheap comparator.
 
-| Group | Columns | Purpose |
-|---|---|---|
-| Identity | `sample_id`, `source`, `scenario`, `frame`, `frame_target` | joins, per-scenario metrics |
-| Modality paths | 15 cols: `image_k`, `lidar_bev_k`, `radar_k` for k=1…5 | the W=5 window; **k=5 is the current instant** |
-| GPS | `ue_x_1/2`, `ue_y_1/2`, `bs_lat`, `bs_lon` | vehicle position in metres from the BS |
-| Beam history | `beam_hist_1..4`, `n_beam_hist_available` | AMBER input modality; **`-1` = unavailable** |
-| Target | `beam`, `beam_official`, `pwr_n_nan` | 0-indexed label, plus an audit trail |
-| Mask | `m_image`, `m_lidar`, `m_radar`, `m_beam`, `m_gps` | drives missing-modality training |
-| Bookkeeping | `pwr_row`, `split` | row into `beam_pwr.npy`; split assignment |
+## 7. Data-integrity findings
 
-### Source vs split — the thing to get right
+Original diagnostic work, not available from the papers.
 
-`source` = which physical release a row came from. `split` = what it may be used
-for. Two columns, so no name ever means two things:
+**Scenario 34 arrived incomplete** — no radar, vehicle GPS or power files on first
+download, and only 1,007 of 4,439 LiDAR files. Re-downloaded; labels now verify
+(`argmax(power)+1 == unit1_beam` for all 4,191). Radar is still short 800 files,
+leaving 40 % of its samples with usable radar.
 
-| source | → split | n | Role |
+**101 power vectors contain NaN, and their official labels are wrong.** For every
+one, `unit1_beam` equals the index of the *first NaN* rather than the argmax of the
+finite bins — the labels were generated with `np.argmax` on NaN-containing vectors.
+This also explains why the obvious check `argmax(power)+1 == unit1_beam` passes at
+100 %: both sides carry the same bug. Anyone training off the official CSV without
+this filter trains on 101 corrupt labels.
+
+**The power vectors are flatter than the standard metric assumes.** The whole
+64-beam vector spans only ~2.6 dB (scenario 32) to ~5.9 dB (scenario 34), so the
+conventional "beams within 3 dB of best" ambiguity measure saturates at 64 and
+carries almost no information. `amber/difficulty.py` therefore also provides
+`margin_db`, `entropy_bits` and `n_within_10pct`.
+
+**Two files are truncated** rather than missing (`lidar_data_2163.ply`,
+`radar_data_3998.npy`); both are reported and skipped rather than aborting a run.
+
+## 8. What this implies for the research direction
+
+The original framing — a cheap Radar + GPS tier escalating to Camera or LiDAR —
+**does not survive the ablation**: radar is nearly worthless and LiDAR adds little.
+The replacement is stronger:
+
+| tier | configuration | GFLOPs | DBA |
 |---|---|---|---|
-| `development` | `train` | 8,844 | fit parameters |
-| `development` | `val` | 2,198 | model selection, early stopping |
-| `adaptation` | `adaptation` | 100 | official labelled set, held out whole |
-| `test` | `test` | 625 | **official test release** — unlabelled, predictions only |
-| `development` | `excluded_nan_pwr` | 101 | corrupt labels (§5) |
+| cheap | GPS | 0.39 | 0.7298 |
+| escalate | GPS + Camera | 48.2 | 0.8835 |
 
-**11,767 usable samples**, spanning scenarios 32, 33 and 34 for training.
-Nothing derived from development is ever called `test`, so any number on the
-`test` split is unambiguously on official held-out data.
+A **124× cost ratio** with **+0.154 DBA** of headroom, against roughly 4× as
+originally framed, and the decision collapses to a clean binary. Dropping radar and
+LiDAR from the design is a *result*, not a retreat.
 
-Adding the official test set is a drop-in: put it at `data/raw/test/` and re-run
-the pipeline. It is **unlabelled**, which is handled — those rows get
-`beam = -1` and stay fully indexed for inference. Verified end to end against a
-staged unlabelled source.
+A second axis falls out of §5: escalating to camera is right in-domain and wrong
+out-of-domain, so *when* to escalate may depend on domain familiarity rather than
+confidence alone.
 
-### Why blocks, not random samples
+**The make-or-break question is still open:** can per-sample routing beat simply
+always using GPS + Camera? If not, there is no contribution. The next experiment
+answers it without any training — for each val sample, which configurations got it
+right, crossed with the difficulty measures, giving the oracle ceiling on how often
+GPS alone would have sufficed.
 
-Consecutive DeepSense6G frames overlap in time and are strongly correlated, so a
-per-sample random split leaks validation data into training. Contiguous
-**50-frame blocks** are assigned whole instead; verified zero frame overlap
-between `train` and `val`.
+## 9. Where things stand
 
-AMBER's paper says "randomly divided into 80/20, each corresponding to an
-independent vehicle pass-by event" — two clauses that conflict, and pass-by
-events aren't recoverable here (only 2–4 macro sessions per scenario exist). So
-`--split-mode` offers `block` (default), `session`, and `random` (faithful to
-the wording, but leaks). **Always state which mode produced a number.**
+| Step | Status |
+|---|---|
+| Data, preprocessing, sanity checks | done |
+| Baseline 4 — AMBER | done (§3) |
+| Modality ablation, 8 configurations | done (§4) |
+| Baseline 5 — KD radar-only student | done, on stale data and its own protocol (§6) |
+| Baseline 1 — official GPS-only LSTM | not started |
+| Baselines 2, 3 — LSTM, TII Transformer | dropped when the project went AMBER-only |
+| Oracle routing analysis | next; prerequisites landed |
+| Adaptive cost-aware gate | gated on the oracle analysis |
+| Difficulty / marginal-utility analysis | tooling ready (`amber/difficulty.py`) |
 
----
-
-## 5. The model
-
-`amber/` implements the AMBER architecture, one module per concern:
-
-| Stage | What it does | Paper |
-|---|---|---|
-| **Encoders** | ResNet34 (image), ResNet18 (lidar, radar), 3-layer MLPs (GPS, beam history) → tokens in a common 256-dim space | eqs. 9–13 |
-| **Embeddings** | sinusoidal spatial + temporal position, then a learnable per-modality weight `α = softmax(w/τ)` | eqs. 16–19 |
-| **Modality-specific block** | self-attention **masked to stay inside each modality**, so nothing leaks between sensors yet | eqs. 21–27 |
-| **Fusion block** | a learnable fusion token cross-attends to **only the modalities that are actually present** | eqs. 28–31 |
-| **CMA** | class queries per modality aligned to the fusion query by a contrastive loss — **training only**, a regulariser | eqs. 32–34 |
-| **Head + loss** | 64 logits; focal loss with **Gaussian soft labels** over the codebook, plus contrastive and L2 terms | eqs. 35–36 |
-
-Two design points worth understanding:
-
-**Missing modalities are handled in three places at once** — the input is
-zeroed, the fusion mask blocks attention to it, and it drops out of the
-contrastive and regularisation terms. That is what makes the model work under
-arbitrary sensor availability, and it is the hook the eventual cost-aware
-routing idea plugs into.
-
-**The loss knows beams are ordered.** Predicting beam 31 when the truth is 30
-costs much less than predicting beam 5, because adjacent beams point in
-adjacent directions. This matches what the DBA metric rewards.
-
-Verified: the token budget reproduces the paper's `N = 108` exactly, all 32
-missing-modality patterns produce finite outputs, gradients reach every
-parameter, and the model drives 8 samples to 100 % Top-1 — the end-to-end proof
-the wiring is right. 24 tests in `tests/test_amber.py` check the paper's claims,
-not just that the code runs.
-
-```bash
-PY=~/.venvs/beamprep/bin/python
-$PY -m amber.train --name amber-full        # 20 epochs, AdamW, cosine schedule
-$PY -m pytest -q                            # the invariant suite
-```
-
----
-
-## 6. Three defects found in the public dataset
-
-None caused by our code; all found by `audit_dataset.py`.
-
-**1 — Scenario 34 arrived incomplete (since largely fixed).** The first download
-had no radar, no vehicle GPS and no power files, and only 1,007 of 4,439 LiDAR
-clouds — so with no labels its 4,191 samples were unusable. After
-re-downloading, camera, LiDAR and power are complete and the labels verify, so
-scenario 34 now contributes 3,300 train / 848 val samples. Two gaps remain: the
-`unit2` GPS directory is still absent (~200 KB of text files, worth fetching),
-and 800 radar files are missing, which leaves only 40 % of scenario-34 samples
-with usable radar because a sample needs all five consecutive frames.
-
-**2 — 58 samples have corrupt labels.** Their power files contain literal `nan`
-values, and for **all 58** the official `unit1_beam` equals the index of the
-*first NaN* rather than the argmax of the real values — the labels were
-generated with `np.argmax` on NaN-containing vectors. This also explains why the
-obvious sanity check `argmax(power)+1 == unit1_beam` passes at 100 %: both sides
-carry the same bug. Anyone training straight off the official CSV trains on 58
-garbage labels. We relabel and quarantine them.
-
-**3 — The power vectors are far flatter than expected.** The whole 64-beam
-vector spans only **2.6 dB** (scenario 32) to **5.6 dB** (scenario 33) between
-best and worst beam, and the top-1 vs top-2 margin has a median of **0.06 dB**.
-Consequence: the conventional "beams within 3 dB of the best" ambiguity measure
-**saturates at 64** for most scenario-32 samples — it says every beam is equally
-good. This directly reshapes what "hard sample" can mean in the planned
-difficulty analysis; prefer continuous margin/entropy measures or a tighter
-threshold.
-
-A fourth, milder issue: **beam history is unavailable for the entire adaptation
-and test splits** — those releases ship only the target frame's power file, not
-the preceding ones. Development has it for 97.9 % of samples. AMBER's mask
-handles the absence, but it means adaptation and test numbers are not directly
-comparable to validation numbers that include beam history, and it is why
-training deliberately drops beam history harder than the paper does.
-
----
-
-## 7. What to show when presenting
-
-Suggested order. The through-line: *the data is real and messy, we understood
-it, and the foundation is correct.*
-
-### Slide 1 — The task
-One diagram: BS with camera/LiDAR/radar, moving vehicle, 64 beams. State the
-input (5+5+5 observations, 2 GPS, 4 past beams) and output (1 of 64 beams). One
-sentence on why: beam search is expensive, the sensors are already there.
-
-### Slide 2 — The dataset
-The scenario table from §2 with sample counts. Show **one real sample**: camera
-frame, LiDAR point cloud, radar cube, and the 64-bar power vector with the
-argmax highlighted. This single slide proves you understand the data.
-
-### Slide 3 — Preprocessing, visually
-**Show before/after images, not equations.** Four panels:
-- radar cube → range-angle + range-velocity heatmaps
-- raw LiDAR cloud → BEV histogram
-- the camera frame at 256×256
-- GPS track plotted in metres relative to the BS
-
-One line per modality on what changed and why.
-
-### Slide 4 — The five modalities AMBER fuses
-Table from §3, with the availability mask called out. The point to land: AMBER
-treats *missing modalities as normal*, which is what makes the cost-aware
-routing idea implementable on top of it rather than a separate architecture.
-
-### Slide 5 — Data-integrity findings *(the strongest slide)*
-All three defects from §6. This is original diagnostic work a reader cannot get
-from the papers. **Lead with the corrupt labels** — "the official labels are
-wrong for 58 samples, and the standard sanity check cannot detect it because
-both sides share the bug" is a genuinely notable result. Pair the flatness
-finding with a **histogram of best-to-worst beam spread** and note that it
-invalidates the textbook 3 dB ambiguity metric.
-
-### Slide 6 — Splits and leakage control
-A timeline graphic: consecutive frames overlap, so random splitting leaks. Show
-the block scheme, the verified zero-overlap result, and the source-vs-split
-table. Mention that AMBER's stated split is self-contradictory and that we
-support both modes. This is the slide that signals methodological care.
-
-### Slide 7 — The model
-The architecture diagram from §5, and the one idea that carries the project:
-AMBER treats **missing modalities as normal**, masking them out of attention
-rather than imputing them. Say that the implementation is verified against the
-paper's own equations (token count, mask semantics, loss form) by a test suite,
-and that it can overfit a tiny batch — the standard evidence of correct wiring.
-
-### Slide 8 — What is ready, what is next
-Sizes, sample counts, split counts, tensor shapes, parameter count. Then the
-roadmap: GPS-only sanity baseline → train AMBER → modality ablations →
-difficulty analysis → the cost-aware gate.
-
-### One number to plant early
-AMBER's own ablation (its Table V): **BeamIdx + GPS alone reaches 58.81 % Top-1
-at 0.077 GFLOPs**, against 64.15 % for the full model at 47.27 GFLOPs. That is
-92 % of the accuracy for 0.16 % of the compute. Show it during the motivation —
-it defines the bar the adaptive-routing idea must clear, and makes the
-cost-efficiency premise concrete rather than speculative.
-
-### What NOT to claim yet
-No accuracy numbers of our own — the model is implemented and verified, but no
-training run has been completed. And no novelty claim
-for adaptive modality selection until the literature comparison in the project
-plan is done. The honest framing today is *"foundation built, defects found,
-baselines next."*
-
----
-
-## 8. Reproducing everything
+## 10. Reproducing
 
 ```bash
 python3 -m venv ~/.venvs/beamprep
 ~/.venvs/beamprep/bin/pip install -r requirements.txt
-
 PY=~/.venvs/beamprep/bin/python bash preprocessing_amber/run_preprocessing.sh
-~/.venvs/beamprep/bin/python -m amber.train --name amber-full
 ```
 
-Full detail — raw formats, per-stage maths, the five hyperparameters AMBER
-leaves unspecified, and the scenario-31/34 reproduction blockers — is in
-[README.md](README.md).
+Then on Kaggle: `notebooks/amber_baseline.ipynb` for §3,
+`notebooks/modality_ablation_part{1,2}.ipynb` plus
+`notebooks/modality_ablation_report.ipynb` for §4.
 
-Note: the project directory name contains a `:`, which prevents `venv` from
-being created inside it, hence the venv in `~/.venvs/`. Renaming the folder to
-`pe_5g_6g` would remove that wrinkle.
+Full detail: [README.md](README.md) for preprocessing and the data findings,
+[results/amber/README.md](results/amber/README.md) for the baseline runs,
+[results/modality_ablation/README.md](results/modality_ablation/README.md) for the
+ablation.
