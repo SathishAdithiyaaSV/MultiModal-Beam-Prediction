@@ -153,13 +153,34 @@ def walk_dirs(base, follow=True):
 
 
 def find_index(base):
-    for cand in (base / "index" / "index", base / "index", base):
+    '''The index directory, chosen deliberately when several are attached.
+
+    A results dataset from a training run contains its own copy of
+    data/processed_amber/index, so more than one samples.csv can be present.
+    Taking the first one found would depend on walk order, so instead prefer the
+    index that sits alongside the actual scenario tensors -- the copy inside a
+    results dump has no development/adaptation/test beside it.
+    '''
+    hits = []
+    for cand in (base / "index" / "index", base / "index"):
         if (cand / "samples.csv").exists():
-            return cand
+            hits.append(cand)
     for d, _dirs, files in walk_dirs(base):
-        if "samples.csv" in files:
-            return d
-    return None
+        if "samples.csv" in files and d not in hits:
+            hits.append(d)
+    if not hits:
+        return None
+    def score(h):
+        roots = [h.parent, h.parent.parent, h]
+        return sum(1 for s in SOURCES
+                   if any(find_source(r, s) is not None for r in roots))
+    ranked = sorted(hits, key=score, reverse=True)
+    if len(hits) > 1:
+        print(f"{len(hits)} index copies attached; using the one co-located with "
+              f"the tensors:")
+        for h in ranked:
+            print(f"  {'->' if h is ranked[0] else '  '} {score(h)}/3 sources  {h}")
+    return ranked[0]
 
 
 def find_source(base, name):
