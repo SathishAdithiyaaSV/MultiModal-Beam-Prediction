@@ -61,9 +61,15 @@ predictions.
 ## What to attach
 
 The ablation checkpoints, as a Kaggle dataset, plus the preprocessed dataset.
-Checkpoints are found by walking for `best.pt`; the configuration is taken from
-the run directory name (`runs/gps_image/best.pt` → GPS + Camera), falling back
-to `enabled_modalities` inside the checkpoint when present.
+Checkpoints are found by walking `/kaggle/input`, in either layout:
+
+- `.../<slug>/best.pt` — a directory named for the configuration, e.g.
+  `runs/gps_image/best.pt`
+- `.../<slug>.pt` — the file itself renamed, e.g. `gps_image.pt`
+
+**Do not flatten eight files all called `best.pt` into one folder** — they would
+collide and the configuration would be unrecoverable. Either keep the
+`runs/<slug>/` directories or rename to `<slug>.pt`.
 
 At minimum the cheap and one expensive configuration must be present. Anything
 missing is reported and skipped.
@@ -216,15 +222,22 @@ KNOWN = set(GFLOPS)
 
 
 def discover_checkpoints():
+    '''Locate one checkpoint per configuration, tolerating either upload layout.
+
+    Accepts both shapes, since flattening eight files all named best.pt into one
+    folder would collide:
+        .../<slug>/best.pt      directory named for the configuration
+        .../<slug>.pt           file renamed to the configuration
+    '''
     found = {}
     for d, _dirs, files in walk_dirs(INPUT_ROOT):
-        if "best.pt" not in files:
-            continue
-        slug = d.name
-        if slug not in KNOWN:
-            continue
-        if slug not in found:
-            found[slug] = d / "best.pt"
+        # layout A: a directory named for the configuration
+        if "best.pt" in files and d.name in KNOWN:
+            found.setdefault(d.name, d / "best.pt")
+        # layout B: files renamed to <slug>.pt
+        for name in files:
+            if name.endswith(".pt") and name[:-3] in KNOWN:
+                found.setdefault(name[:-3], d / name)
     return found
 
 
