@@ -23,6 +23,7 @@ Two details that matter for correctness:
     to beam 0; the explicit present flag keeps the two distinguishable.
 """
 import json
+import warnings
 from pathlib import Path
 
 from typing import Sequence
@@ -100,13 +101,29 @@ class AmberDataset(Dataset):
             if len(have) == 0:
                 shapes[key] = None                # modality absent everywhere
                 continue
-            row = self.frame.loc[have[0]]
-            if key == "image":
-                with Image.open(self.root / row[cols[0]]) as img:
-                    w, h = img.size
-                shapes[key] = (3, h, w)
-            else:
-                shapes[key] = np.load(self.root / row[cols[0]]).shape
+            # Try several rows rather than trusting the first. The mask says the
+            # file should exist, but an incomplete upload can leave the index
+            # claiming a file that is not there, and a shape probe should not
+            # bring down a whole run over it.
+            shapes[key] = None
+            for idx in have[:32]:
+                path = self.root / self.frame.loc[idx, cols[0]]
+                try:
+                    if key == "image":
+                        with Image.open(path) as img:
+                            w, h = img.size
+                        shapes[key] = (3, h, w)
+                    else:
+                        shapes[key] = np.load(path).shape
+                    break
+                except (FileNotFoundError, OSError, ValueError):
+                    continue
+            if shapes[key] is None:
+                warnings.warn(
+                    f"could not read any {key} file to probe its shape, despite "
+                    f"m_{key}=1 for {len(have)} rows -- the index and the data on "
+                    f"disk disagree. Falling back to a default shape; check that "
+                    f"the dataset is complete.", RuntimeWarning, stacklevel=2)
         return shapes
 
     def _load_images(self, row) -> torch.Tensor:
