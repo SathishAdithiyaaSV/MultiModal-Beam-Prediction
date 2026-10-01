@@ -49,7 +49,6 @@ class AmberDataset(Dataset):
                  cfg: ModelConfig, root: str | Path | None = None,
                  modalities: Sequence[str] | None = None,
                  degradations: "Sequence | None" = None,
-                 quality_features: bool = False,
                  standardise_images: bool = True):
         self.index_dir = Path(index_dir)
         self.root = Path(root) if root is not None else self.index_dir.parents[2]
@@ -91,9 +90,6 @@ class AmberDataset(Dataset):
                 raise ValueError(
                     f"no faithful degradation exists for {d.modality!r} on this "
                     f"representation; see amber.degrade.REJECTED")
-        # Cheap, inference-available sensor-quality statistics for the gate.
-        # Deliberately computed from the raw tensors, never from the target.
-        self.quality_features = quality_features
         self._shapes = self._probe_shapes()
 
     def __len__(self) -> int:

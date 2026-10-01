@@ -169,3 +169,30 @@ FEATURE_GROUPS = {
     ],
     "C_plus_sensor_quality": None,   # every feature; filled in at run time
 }
+
+
+def batch_features(batch: dict, logits: "torch.Tensor", modalities,
+                   include_sensor_quality: bool = True) -> list[dict]:
+    """Per-sample inference-available features for a collated batch.
+
+    Computed here rather than in the dataset because the statistics are cheap
+    reductions over tensors the batch already holds, and because a per-sample
+    dict of floats does not collate cleanly.
+
+    `logits` are the cheap model's outputs for the same batch -- already paid
+    for, since the cheap model has run. Set `include_sensor_quality=False` for
+    the groups that must not read an expensive sensor.
+    """
+    n = logits.shape[0]
+    out = []
+    for i in range(n):
+        f = {}
+        f.update(prediction_signals(logits[i]))
+        f.update(availability(batch["availability"][i], modalities))
+        f.update(gps_quality(batch["gps"][i]))
+        if include_sensor_quality:
+            f.update(image_quality(batch["image"][i]))
+            f.update(lidar_quality(batch["lidar"][i]))
+            f.update(radar_quality(batch["radar"][i]))
+        out.append(f)
+    return out
