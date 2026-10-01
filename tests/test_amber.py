@@ -491,3 +491,76 @@ def test_dba_and_topk_decompose_per_sample():
     tk = topk_accuracy(logits, targets, (1, 3))
     assert abs(tk[1] - (ranked[:, 0] == true[:, 0]).mean()) < 1e-9
     assert abs(tk[3] - (ranked[:, :3] == true).any(axis=1).mean()) < 1e-9
+
+
+def test_affine_camera_degradations_are_provably_cancelled():
+    """Brightness and contrast cannot be studied on this architecture.
+
+    AMBER eq. (10) standardises each image by its own mean and std, which is
+    affine-invariant: x -> a*x + b becomes (a*x + b - a*mean - b)/(a*std) =
+    (x - mean)/std. So any lighting degradation is an exact no-op, and an
+    experiment measuring it would be measuring nothing. Pinned here because the
+    rejection is a claim about the architecture, not a judgement call.
+    """
+    from amber.degrade import Degradation, apply_camera
+
+    def standardise(t):
+        return (t - t.mean()) / t.std().clamp(min=1e-6)
+
+    torch.manual_seed(0)
+    img = torch.rand(3, 64, 64)
+    base = standardise(img)
+    for a, b in ((1.8, 0.0), (1.0, 0.3), (1.8, 0.3), (0.4, -0.1)):
+        assert torch.allclose(standardise(img * a + b), base, atol=1e-4)
+
+    # the degradations we do use must NOT be cancelled
+    for kind, sev in (("blur", 2.0), ("noise", 0.2), ("occlusion", 0.3),
+                      ("resolution", 0.25)):
+        out = standardise(apply_camera(img, Degradation("image", kind, sev)))
+        assert (out - base).abs().max() > 0.1, f"{kind} was cancelled"
+
+
+def test_lidar_dropout_is_exact_binomial_thinning():
+    """Each LiDAR return must survive independently with probability `keep`.
+
+    The BEV cell value is count/5 with count an integer in 0..5, so thinning
+    has an exact meaning and an approximate implementation would misstate the
+    degradation level on every curve.
+    """
+    from amber.degrade import lidar_point_dropout
+
+    g = torch.Generator().manual_seed(0)
+    counts = torch.randint(0, 6, (1, 200, 200)).float()
+    bev = counts / 5.0
+    assert torch.equal(lidar_point_dropout(bev, 1.0, g), bev)
+    for keep in (0.5, 0.25, 0.1):
+        out = lidar_point_dropout(bev, keep, g)
+        retained = (out * 5).round()
+        assert bool((retained <= counts).all())          # cannot invent returns
+        assert abs(float(retained.sum() / counts.sum()) - keep) < 0.02
+
+
+def test_gate_features_never_touch_the_target():
+    """The gate must not see anything derived from the label.
+
+    Its inputs are the whole validity of the routing claim, so this asserts the
+    feature names cannot carry beam, power-vector or correctness information.
+    """
+    from amber import quality
+    from amber.config import MODALITIES
+
+    feats = {
+        **quality.image_quality(torch.rand(5, 3, 32, 32)),
+        **quality.lidar_quality(torch.rand(5, 1, 32, 32)),
+        **quality.radar_quality(torch.rand(5, 2, 32, 32)),
+        **quality.gps_quality(torch.rand(2, 2)),
+        **quality.availability(torch.ones(len(MODALITIES)), MODALITIES),
+        **quality.prediction_signals(torch.randn(64)),
+    }
+    forbidden = ("true_beam", "label", "target", "correct", "dba", "oracle",
+                 "margin_db", "beam_pwr", "entropy_bits")
+    assert not [k for k in feats if any(f in k for f in forbidden)]
+    assert all(isinstance(v, float) for v in feats.values())
+    # group A/B must be computable with no expensive sensor read
+    for f in quality.FEATURE_GROUPS["B_confidence_plus_uncertainty_availability"]:
+        assert not f.startswith(("img_", "lidar_", "radar_")), f

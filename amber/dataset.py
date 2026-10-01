@@ -34,6 +34,7 @@ import torch
 from PIL import Image
 from torch.utils.data import Dataset
 
+from . import degrade
 from .config import MODALITIES, ModelConfig
 
 GPS_COLS = ("ue_x_1", "ue_y_1", "ue_x_2", "ue_y_2")
@@ -47,6 +48,8 @@ class AmberDataset(Dataset):
     def __init__(self, index_dir: str | Path, split: str | list[str],
                  cfg: ModelConfig, root: str | Path | None = None,
                  modalities: Sequence[str] | None = None,
+                 degradations: "Sequence | None" = None,
+                 quality_features: bool = False,
                  standardise_images: bool = True):
         self.index_dir = Path(index_dir)
         self.root = Path(root) if root is not None else self.index_dir.parents[2]
@@ -79,6 +82,18 @@ class AmberDataset(Dataset):
         unknown = self.enabled - set(MODALITIES)
         if unknown:
             raise ValueError(f"unknown modalities {sorted(unknown)}")
+        # Modality degradations, applied to the representation the model
+        # consumes. For the camera this happens BEFORE standardisation, because
+        # eq. (10) is affine-invariant and would otherwise cancel part of it.
+        self.degradations = list(degradations or [])
+        for d in self.degradations:
+            if d.modality not in ("image", "lidar", "gps"):
+                raise ValueError(
+                    f"no faithful degradation exists for {d.modality!r} on this "
+                    f"representation; see amber.degrade.REJECTED")
+        # Cheap, inference-available sensor-quality statistics for the gate.
+        # Deliberately computed from the raw tensors, never from the target.
+        self.quality_features = quality_features
         self._shapes = self._probe_shapes()
 
     def __len__(self) -> int:
@@ -137,6 +152,9 @@ class AmberDataset(Dataset):
             with Image.open(self.root / row[col]) as img:
                 arr = np.asarray(img.convert("RGB"), dtype=np.float32) / 255.0
             t = torch.from_numpy(arr).permute(2, 0, 1)
+            for d in self.degradations:
+                if d.modality == "image":
+                    t = degrade.apply_camera(t, d)
             if self.standardise_images:                      # eq. (10)
                 t = (t - t.mean()) / t.std().clamp(min=EPS)
             frames.append(t)
@@ -146,14 +164,25 @@ class AmberDataset(Dataset):
         if not row[f"m_{key}"] or key not in self.enabled:
             shape = self._shapes[key] or ((1, 256, 256) if key == "lidar" else (2, 256, 256))
             return torch.zeros(len(columns), *shape)
-        return torch.stack([torch.from_numpy(
+        maps = torch.stack([torch.from_numpy(
             np.load(self.root / row[col]).astype(np.float32)) for col in columns])
+        if key == "lidar":
+            for d in self.degradations:
+                if d.modality == "lidar" and d.kind == "dropout":
+                    maps = torch.stack([degrade.lidar_point_dropout(m, d.severity)
+                                        for m in maps])
+        return maps
 
     def _load_gps(self, row) -> torch.Tensor:
         raw = np.array([row[c] for c in GPS_COLS], dtype=np.float32)
         raw = np.nan_to_num(raw, nan=0.0)
         scaled = (raw - self.gps_lo) / np.maximum(self.gps_hi - self.gps_lo, EPS)
-        return torch.from_numpy(scaled.clip(0.0, 1.0)).view(2, 2)
+        out = torch.from_numpy(scaled.clip(0.0, 1.0)).view(2, 2)
+        span = np.maximum(self.gps_hi - self.gps_lo, EPS)
+        for d in self.degradations:
+            if d.modality == "gps" and d.kind == "position_noise":
+                out = degrade.gps_position_noise(out, d.severity, span)
+        return out
 
     def _load_beam_history(self, row) -> torch.Tensor:
         out = torch.zeros(len(self.beam_cols), 2)
