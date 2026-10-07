@@ -341,3 +341,43 @@ Full detail: [README.md](README.md) for preprocessing and the data findings,
 ablation, and
 [results/oracle_routing/README.md](results/oracle_routing/README.md) for the
 routing analysis.
+
+---
+
+## 12. The learned adaptive gate — result
+
+*(Added 2026-10-07. Full detail: [CONTEXT.md](CONTEXT.md) §4.3 and
+[results/adaptive_gate/full_run/](results/adaptive_gate/full_run/).)*
+
+A 2,113-parameter MLP over 31 inference-available features — cheap-model
+uncertainty, the availability mask, GPS and sensor-quality statistics. No beam
+label, power vector or correctness signal is ever an input; those build the
+training target only. Fitted on `train` (8,844), evaluated on `val` (2,198).
+
+Escalation needed to reach always-expensive DBA (0.8835), with GPS as the cheap
+tier (0.39 GFLOPs) and GPS + Camera as the expensive one (48.24):
+
+| policy | escalated | GFLOPs | compute saved |
+|---|---|---|---|
+| oracle (DBA-optimal) | 26 % | 12.83 | 73 % |
+| **learned gate (`regress_gain`)** | **66 %** | **31.97** | **34 %** |
+| learned gate (`classify`) | 84 % | 40.58 | 16 % |
+| confidence threshold | 87 % | 42.02 | 13 % |
+
+The learned gate beats confidence thresholding at every escalation budget
+(+0.027 DBA at 10 %, +0.017 at 25 %, against a ±0.011 paired standard error),
+and leave-one-scenario-out transfer recovers 63–76 % of the cheap→expensive gap.
+The regression objective clearly beats the classification one, which loses even
+to plain confidence below 50 % escalation.
+
+Two corrections recorded with this result. A 400-sample pilot had shown the gate
+*within noise* of confidence — an artefact of fitting 2,113 parameters on 400
+samples, not a property of the method. And the original single `ORACLE` curve
+was ordered by the Top-1 criterion, which is not optimal for DBA; corrected, the
+ceiling is higher (26 % escalation rather than 33 %).
+
+**Still outstanding:** `modality_robustness.ipynb` and
+`modality_quality_signal.ipynb` are built but not yet run; scenario 31's full
+release (7,012 samples) is needed for the generalisation claim, which currently
+rests on n=50; and every number in this document is a single training run with
+no seeds or error bars.

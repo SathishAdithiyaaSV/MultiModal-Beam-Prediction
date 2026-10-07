@@ -1,5 +1,7 @@
 # Multimodal mmWave Beam Prediction — AMBER
 
+> **New here (human or agent)? Read [CONTEXT.md](CONTEXT.md) first** — full project handoff: constraints, data, results, bugs already fixed, and what to do next.
+
 Preprocessing **and model** for the **DeepSense6G 2022 Multi-Modal Beam
 Prediction** dataset, restricted to **scenarios 31–34**, implementing
 
