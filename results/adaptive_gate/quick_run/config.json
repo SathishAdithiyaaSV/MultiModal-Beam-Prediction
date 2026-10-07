@@ -1,0 +1,56 @@
+{
+  "quick_run": true,
+  "cheap": "gps",
+  "expensive": "gps_image",
+  "routes": [
+    "gps",
+    "gps_image"
+  ],
+  "train_split": "train",
+  "eval_split": "val",
+  "limits": {
+    "train": 400,
+    "eval": 300
+  },
+  "n_features": 31,
+  "features": [
+    "top1_conf",
+    "top2_conf",
+    "margin_12",
+    "margin_15",
+    "entropy",
+    "top5_mass",
+    "pred_beam_norm",
+    "avail_image",
+    "avail_lidar",
+    "avail_radar",
+    "avail_beam",
+    "avail_gps",
+    "avail_count",
+    "gps_step",
+    "gps_step_x",
+    "gps_step_y",
+    "gps_at_boundary",
+    "gps_radius",
+    "img_sharpness",
+    "img_sharpness_coarse",
+    "img_hf_ratio",
+    "img_dark_frac",
+    "img_temporal_change",
+    "lidar_points",
+    "lidar_occupancy",
+    "lidar_mean_count",
+    "lidar_temporal_change",
+    "radar_peak",
+    "radar_mean",
+    "radar_peak_to_mean",
+    "radar_energy_frac_top1pct"
+  ],
+  "gate_objectives": [
+    "classify",
+    "regress_gain"
+  ],
+  "gate_parameters": 2113,
+  "cost_model": "cost(f) = 0.3869 + f * (48.2398 - 0.3869)",
+  "leakage_note": "gate inputs contain no beam, power vector, or correctness signal; those build the training target only"
+}
