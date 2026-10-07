@@ -217,7 +217,17 @@ def run_eval(slug, split, degradations=(), mask_out=(), limit=None,
     '''
     model, cfg = get_model(slug)
     mods = parse_modalities(slug.split("_"))
-    ds = AmberDataset(INDEX_DIR, split, cfg, modalities=mods,
+    # Sensor-quality features must be computed from the *real* tensors. The
+    # dataset returns zeros for any modality outside `modalities`, so a cheap
+    # GPS-only configuration would otherwise yield identically-zero image,
+    # LiDAR and radar statistics -- which silently collapses feature group C
+    # onto group B. Load every modality when collecting them; the model is
+    # still restricted through `keep` below, and availability masking is
+    # numerically equivalent to not loading (verified: delta logits = 0.0), so
+    # the logits are unchanged.
+    ds_mods = (tuple(MODALITIES) if (collect_features and COLLECT_SENSOR_QUALITY)
+               else mods)
+    ds = AmberDataset(INDEX_DIR, split, cfg, modalities=ds_mods,
                       degradations=list(degradations))
     if limit:
         from torch.utils.data import Subset
@@ -233,13 +243,18 @@ def run_eval(slug, split, degradations=(), mask_out=(), limit=None,
         else enabled_mask(mods, device)
     logits, targets, feats = [], [], []
     for batch in loader:
-        batch = restrict_availability(to_device(batch, device), keep)
+        raw = to_device(batch, device)
+        batch = restrict_availability(raw, keep)
         out = model(batch, use_cma=False)
         logits.append(out.logits.float().cpu())
         targets.append(batch["target"].cpu())
         if collect_features:
+            # from `raw`, not `batch`: avail_* should report which sensors
+            # actually reported, not which this configuration was permitted to
+            # consume. The latter is constant per configuration and so carries
+            # no information for the gate.
             feats += quality.batch_features(
-                {k: v.cpu() for k, v in batch.items() if torch.is_tensor(v)},
+                {k: v.cpu() for k, v in raw.items() if torch.is_tensor(v)},
                 out.logits.float().cpu(), MODALITIES, COLLECT_SENSOR_QUALITY)
     logits, targets = torch.cat(logits), torch.cat(targets)
     lab = targets >= 0
@@ -634,6 +649,23 @@ FEATURE_COLS = [c for c in F.columns if c not in (
     "sample_id", "scenario", "true_beam", "pred_beam", "correct1", "correct3", "dba",
     "exp_correct1", "exp_correct3", "exp_dba", "exp_pred_beam",
     "label_escalate", "gain_dba", "label_cheap_ok")]
+# Guard: a constant feature contributes exactly nothing, and a *whole group*
+# of constant features silently collapses group C onto group B. This happened
+# once -- the dataset returns zeros for modalities outside the configuration's
+# slug, so every sensor-quality statistic was identically zero. Fail loudly.
+_const = [c for c in FEATURE_COLS if F[c].nunique() <= 1]
+if _const:
+    print(f"WARNING: {len(_const)} constant features carry no information:")
+    print("   " + ", ".join(_const))
+    _sensor_const = [c for c in _const if c.startswith(("img_", "lidar_", "radar_"))]
+    if _sensor_const:
+        raise RuntimeError(
+            f"{len(_sensor_const)} sensor-quality features are constant, so feature "
+            f"group C is identical to group B and the processing-vs-sensing "
+            f"comparison is void. The dataset must be loaded with every modality "
+            f"when collecting these features -- check COLLECT_SENSOR_QUALITY and "
+            f"the ds_mods logic in run_eval.")
+
 print(f"\n{len(FEATURE_COLS)} candidate features")
 print(f"cheap correct    {F.correct1.mean():.4f}")
 print(f"expensive correct {F.exp_correct1.mean():.4f}")

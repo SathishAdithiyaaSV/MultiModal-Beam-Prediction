@@ -1,0 +1,4 @@
+group,n_features,needs_sensor_read,mean_AUC_heldout_scenario,per_fold
+A_confidence_only,1,False,0.6498424834094952,0.587 0.657 0.706
+B_uncertainty_plus_availability,18,False,0.5659288057727804,0.515 0.519 0.664
+C_plus_sensor_quality,31,True,0.5659288057727804,0.515 0.519 0.664

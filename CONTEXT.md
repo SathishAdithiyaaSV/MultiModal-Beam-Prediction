@@ -238,6 +238,7 @@ DBA at fixed escalation budgets:
 | Non-idempotent Kaggle staging (`/kaggle/working` persists; `.exists()` follows symlinks) | validate and re-stage |
 | Output buffering made a healthy run look stalled for 40 min | `python -u` |
 | LiDAR binomial thinning guarded on a running total (retained 67 % at keep=0.5) | index return slots; now exact to 1 % |
+| **Sensor-quality features were identically zero.** `AmberDataset` returns zero tensors for modalities outside the configuration's slug, so a GPS-only cheap tier produced 13 constant image/LiDAR/radar statistics. Feature group C collapsed bit-identically onto group B | `run_eval` now loads every modality when collecting features and restricts the *model* via the availability mask (equivalent, Δlogits = 0.0); features taken pre-restriction so `avail_*` reports true sensor presence. A guard raises on constant sensor features |
 | **Oracle ordering**: a single `ORACLE` curve ordered by the Top-1 criterion was used as the DBA ceiling | DBA is maximised by ordering on per-sample DBA *gain*. Builder now emits `ORACLE (Top-1 optimal)` and `ORACLE (DBA optimal)` separately, each plotted only on its own metric's panel |
 
 **The oracle bug is worth understanding**: the tell was `regress_gain` scoring
@@ -293,7 +294,7 @@ the per-sample tables.
 | ✅ | **Learned adaptive gate — beats confidence, full run complete** |
 | ❌ | Difficulty-aware gating — **ruled out**, do not build |
 | 🔄 | `modality_robustness.ipynb` — **built, not yet run** |
-| 🔄 | `modality_quality_signal.ipynb` — **built, not yet run** |
+| ⚠️ | `modality_quality_signal.ipynb` — **run, but void** (sensor features were all zero; bug fixed, needs re-running) |
 | ⬜ | Scenario 31 full release (7,012 samples) |
 | ⬜ | Multiple seeds / error bars — everything is currently a single run |
 | ⬜ | Validate the AMBER reimplementation against the paper's reported numbers |
@@ -301,9 +302,11 @@ the per-sample tables.
 
 ### Immediate next actions, in priority order
 
-1. **Run the two built notebooks** (`modality_robustness`,
-   `modality_quality_signal`) on Kaggle. Set `QUICK_RUN = False`. They need the
-   preprocessed dataset plus the 8 checkpoints attached as Kaggle inputs.
+1. **Re-run `modality_quality_signal`** with the feature-extraction fix and
+   `QUICK_RUN = False`; the first run is void. Then **re-run the gate** with the
+   same fix — it has never seen sensor-quality features, so its 34 %-saving
+   result is a floor. Then run `modality_robustness`, which has never been run.
+   All need the preprocessed dataset plus the 8 checkpoints as Kaggle inputs.
 2. **Get the standalone scenario-31 release (7,012 samples).** The camera
    generalisation trap — the most interesting finding — currently rests on
    n=50. This converts an anecdote into a headline result.
