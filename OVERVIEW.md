@@ -381,3 +381,45 @@ ceiling is higher (26 % escalation rather than 33 %).
 release (7,012 samples) is needed for the generalisation claim, which currently
 rests on n=50; and every number in this document is a single training run with
 no seeds or error bars.
+
+
+---
+
+## 13. Modality robustness — degradation and missing modalities
+
+*(Added 2026-10-07. Full detail:
+[results/modality_robustness/](results/modality_robustness/).)*
+Full run, n = 2,198 at every point.
+
+**Camera tipping points.** GPS + Camera (48.24 GFLOPs) falls below free GPS
+alone (0.7298 DBA, 0.39 GFLOPs) at blur σ≈1.3 px, noise σ≈0.084, occlusion
+≈17.5 % of frame, and resolution ≈0.42. None of these are extreme — a σ=2
+blurred frame still looks normal, and there the camera costs 124× more and
+performs worse. These are the thresholds a cost-aware router should trigger on.
+
+**GPS precision.** At 5 m error — ordinary consumer GNSS — GPS alone falls from
+0.7298 to **0.4367**, losing 40 % of its DBA. The "GPS alone gets 83 % of full
+accuracy at 0.4 % of the compute" result is true for DeepSense's high-precision
+positioning and must be quoted with that qualification. GPS + Camera, by
+contrast, barely moves across the whole sweep (0.8360 even at 20 m), so
+**camera is the redundancy modality as well as the accuracy modality** — a
+second argument for it that partly offsets the generalisation trap.
+
+**Masking is not equivalent to training.** Masked full model vs an
+independently trained one: −0.4048 DBA for gps+radar, −0.3654 for gps+lidar,
+−0.3639 for gps+radar+lidar, but only −0.0132 for gps+image and −0.0033 for
+gps+radar+image. The pattern is exact — masking is fine whenever camera
+survives and catastrophic whenever it does not. AMBER's eq. (3) availability
+mechanism handles *redundant* missing modalities, not the loss of the one the
+model actually learned to use. The practical consequence is that **a cheap tier
+cannot be built by masking the expensive model; tiers must be independently
+trained**, which is what we do.
+
+Dropping a single modality from the full model confirms the ablation by an
+independent route: lidar −0.0003, radar −0.0012, gps −0.0214, **image −0.4373**.
+LiDAR and radar are within noise of contributing nothing.
+
+**Natural missingness is confounded.** Samples where radar is genuinely absent
+score *higher* (DBA 0.9046, n=453) than where it is present (0.8684, n=1,745),
+because missingness concentrates in scenario 34. It cannot serve as a proxy for
+synthetic masking.

@@ -188,6 +188,26 @@ measure scores *below* raw confidence (0.633, 0.593, 0.591 vs 0.686) — and sin
 they are computed from the target they were the *ceiling* for that approach.
 Do not build it.
 
+### 4.2b Modality robustness (`results/modality_robustness/full_run/`)
+
+Full run, n=2,198 at every point. See that directory's README for detail.
+
+- **Camera tipping points** — GPS + Camera falls below free GPS alone at blur
+  σ≈1.3, noise σ≈0.084, occlusion ≈17.5 % of frame, resolution ≈0.42. None are
+  extreme; these are the thresholds a router should trigger on.
+- **GPS precision dependency** — at 5 m error (consumer GNSS) GPS alone drops
+  0.7298 → 0.4367. **The "GPS alone is 83 % of full DBA" claim requires
+  DeepSense's high-precision positioning.** GPS + Camera is unaffected
+  (0.8360 at 20 m), so **camera is also the redundancy modality**.
+- **Masking ≠ training.** Masked full model vs independently trained: −0.40 DBA
+  for gps+radar, −0.37 for gps+lidar, but only −0.01 for gps+image. Masking is
+  fine when camera survives and catastrophic when it does not. **A cheap tier
+  cannot be built by masking the expensive model.**
+- Dropping one modality from the full model: lidar −0.0003, radar −0.0012,
+  gps −0.0214, **image −0.4373**.
+- **Natural missingness is confounded** — radar-absent samples score *higher*
+  (0.9046 vs 0.8684), as missingness concentrates in scenario 34.
+
 ### 4.3 Learned adaptive gate (`results/adaptive_gate/full_run/`) — **the newest result**
 
 Cheap tier GPS (0.39 GFLOPs), expensive tier GPS + Camera (48.24),
@@ -293,7 +313,7 @@ the per-sample tables.
 | ✅ | Faithful degradations + 31 inference-available quality features |
 | ✅ | **Learned adaptive gate — beats confidence, full run complete** |
 | ❌ | Difficulty-aware gating — **ruled out**, do not build |
-| 🔄 | `modality_robustness.ipynb` — **built, not yet run** |
+| ✅ | **`modality_robustness.ipynb` — run, full result** (camera tipping points; masking fails without camera) |
 | ⚠️ | `modality_quality_signal.ipynb` — **run, but void** (sensor features were all zero; bug fixed, needs re-running) |
 | ⬜ | Scenario 31 full release (7,012 samples) |
 | ⬜ | Multiple seeds / error bars — everything is currently a single run |

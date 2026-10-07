@@ -1,0 +1,138 @@
+{
+  "quick_run": false,
+  "split": "val",
+  "limit": null,
+  "sweeps": [
+    {
+      "slug": "gps_image",
+      "modality": "image",
+      "kind": "blur",
+      "grid": [
+        0.0,
+        1.0,
+        2.0,
+        4.0,
+        8.0
+      ]
+    },
+    {
+      "slug": "gps_image",
+      "modality": "image",
+      "kind": "noise",
+      "grid": [
+        0.0,
+        0.05,
+        0.1,
+        0.2,
+        0.4
+      ]
+    },
+    {
+      "slug": "gps_image",
+      "modality": "image",
+      "kind": "occlusion",
+      "grid": [
+        0.0,
+        0.05,
+        0.15,
+        0.35,
+        0.6
+      ]
+    },
+    {
+      "slug": "gps_image",
+      "modality": "image",
+      "kind": "resolution",
+      "grid": [
+        1.0,
+        0.5,
+        0.25,
+        0.125,
+        0.0625
+      ]
+    },
+    {
+      "slug": "gps",
+      "modality": "gps",
+      "kind": "position_noise",
+      "grid": [
+        0.0,
+        1.0,
+        2.0,
+        5.0,
+        10.0,
+        20.0
+      ]
+    },
+    {
+      "slug": "gps_image",
+      "modality": "gps",
+      "kind": "position_noise",
+      "grid": [
+        0.0,
+        1.0,
+        2.0,
+        5.0,
+        10.0,
+        20.0
+      ]
+    },
+    {
+      "slug": "gps_lidar",
+      "modality": "lidar",
+      "kind": "dropout",
+      "grid": [
+        1.0,
+        0.5,
+        0.25,
+        0.1,
+        0.02
+      ]
+    }
+  ],
+  "rejected_degradations": {
+    "camera_brightness": "provably cancelled by eq. (10) per-image standardisation",
+    "camera_contrast": "provably cancelled by eq. (10) per-image standardisation",
+    "radar_noise": "RA/RV maps are post-FFT magnitudes; map-domain noise has no physical pre-image. Natural missingness used instead",
+    "radar_map_corruption": "same reason as radar_noise",
+    "lidar_range_truncation": "BEV is already cropped to the +/-50 m ROI holding 99% of points",
+    "gps_fewer_observations": "only two GPS observations exist; dropping one is the missing-modality experiment, not a degradation curve"
+  },
+  "missing_subsets": [
+    [],
+    [
+      "image"
+    ],
+    [
+      "lidar"
+    ],
+    [
+      "radar"
+    ],
+    [
+      "gps"
+    ],
+    [
+      "image",
+      "radar"
+    ],
+    [
+      "image",
+      "lidar"
+    ],
+    [
+      "radar",
+      "lidar"
+    ]
+  ],
+  "checkpoints_used": [
+    "gps",
+    "gps_image",
+    "gps_image_lidar",
+    "gps_lidar",
+    "gps_radar",
+    "gps_radar_image",
+    "gps_radar_image_lidar",
+    "gps_radar_lidar"
+  ]
+}

@@ -398,6 +398,53 @@ reported.
 
 ---
 
+## 16d · Modality robustness — tipping points and a failed safety claim
+
+**Camera is fragile.** Severity at which GPS + Camera (48.24 GFLOPs) drops
+*below* free GPS alone (0.7298 DBA, 0.39 GFLOPs):
+
+| degradation | tipping point |
+|---|---|
+| blur | **σ ≈ 1.3 px** — mild defocus |
+| noise | **σ ≈ 0.084** — a dim night scene |
+| occlusion | **≈ 17.5 % of frame** — a raindrop |
+| resolution | **≈ 0.42 downscale** |
+
+None are extreme. These are the thresholds a cost-aware router should trigger on.
+
+**The GPS cheap tier needs better-than-consumer GNSS.**
+
+| GPS error | GPS alone | GPS + Camera |
+|---|---|---|
+| 0 m | 0.7298 | 0.8835 |
+| **5 m** (consumer) | **0.4367** | 0.8743 |
+| 20 m | 0.1610 | 0.8360 |
+
+The "GPS alone gets 83 % at 0.4 % of compute" result **requires DeepSense's
+high-precision positioning**. But camera makes the system GPS-robust — so
+**camera is the redundancy modality, not only the accuracy modality.** That
+partly offsets the generalisation trap.
+
+**AMBER's availability masking does not degrade gracefully.**
+
+| modalities | masked | independently trained | gap |
+|---|---|---|---|
+| gps + radar | 0.3746 | 0.7794 | **−0.4048** |
+| gps + lidar | 0.4117 | 0.7770 | **−0.3654** |
+| gps + image | 0.8703 | 0.8835 | −0.0132 |
+
+Masking is fine whenever camera survives and catastrophic whenever it does not.
+Eq. (3) handles *redundant* missing modalities, not the one the model actually
+learned to use. **Consequence: a cheap tier cannot be built by masking the
+expensive model — tiers must be independently trained.**
+
+Dropping one modality from the full model confirms the ablation independently:
+lidar **−0.0003**, radar **−0.0012**, gps −0.0214, image **−0.4373**.
+
+*Detail: [results/modality_robustness/](results/modality_robustness/)*
+
+---
+
 ## 17 · Honest limitations
 
 - **10 epochs**, not to convergence. Best epochs were 8–10, so the ranking is
@@ -406,6 +453,8 @@ reported.
   100 % of the test split — including them would inflate results with a signal
   that vanishes at inference.
 - **Scenario 31: n = 50.** The generalisation finding needs its full release.
+- **The GPS-alone headline assumes high-precision positioning** — at 5 m
+  consumer-GNSS error the cheap tier loses 40 % of its DBA.
 - **Scenario 34 supplies radar for only 40 %** of its samples, so radar
   configurations are partly GPS-only there — this *understates* radar.
 - **Not comparable to the paper** (0.6415 Top-1): it trains on all four
@@ -435,7 +484,8 @@ reported.
 | ✅ | Oracle routing analysis — headroom real, confidence gate weak |
 | ✅ | **Learned adaptive gate — beats confidence, 34 % vs 13 % compute saved** |
 | ❌ | Difficulty-aware gating — **ruled out**, scores below confidence |
-| 🔄 | Modality robustness + quality-signal notebooks — **built, not yet run** |
+| ✅ | Modality robustness — tipping points; masking fails without camera |
+| ⚠️ | Quality-signal notebook — run twice, both void (sensor features zero); fixed, needs re-running |
 | ⬜ | Scenario 31 full release — needed for the generalisation claim |
 | ⬜ | Seeds / error bars — everything is a single run |
 | ⬜ | Validate the AMBER reimplementation against the paper's numbers |
