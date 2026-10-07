@@ -1,0 +1,12 @@
+feature,AUC,needs_sensor_read
+top1_conf,0.6864018574297188,False
+margin_15,0.6830313678958257,False
+margin_12,0.6671857886089814,False
+top2_conf,0.6498018589509553,False
+top5_mass,0.640197152245345,False
+entropy,0.6133468533223805,False
+gps_step,0.5576852866009492,False
+gps_step_x,0.5309942421199951,False
+gps_step_y,0.5302089037970061,False
+pred_beam_norm,0.5159629997261774,False
+gps_radius,0.5040659798284045,False

@@ -7,8 +7,21 @@ Produced by [`notebooks/modality_quality_signal.ipynb`](../../notebooks/modality
 
 | run | status |
 |---|---|
-| [`quick_run_void/`](quick_run_void/) | **void — a bug made the central comparison impossible.** Also `QUICK_RUN = True`. |
+| [`full_run_prefix/`](full_run_prefix/) | full `val` (2,198), but **ran the pre-fix notebook**. Group C still void; the no-sensor-read results are valid and useful. |
+| [`quick_run_void/`](quick_run_void/) | void — same bug, and `QUICK_RUN = True`. Superseded. |
 | corrected run | **not yet performed.** Blocking next step. |
+
+## Valid full-scale findings so far
+
+`top1_conf` scores **AUC 0.6864**, independently reproducing the oracle study's
+0.686. The confidence family takes the top six places; **GPS geometry carries
+almost no routing signal** (0.50–0.56).
+
+And, held-out-scenario: **confidence alone (0.6952) beats all eighteen
+no-sensor-read features (0.6527)**. Richer features help *in domain* — that is
+how the gate wins — but hurt *across scenarios*. The extra features encode
+environment-specific structure, the same pattern as the camera generalisation
+trap. See [`full_run_prefix/README.md`](full_run_prefix/README.md).
 
 ## The bug: feature group C was never actually tested
 
