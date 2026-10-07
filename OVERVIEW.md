@@ -105,7 +105,8 @@ model is Pareto-dominated by a two-modality one**.
 0.8789). GPS + LiDAR (0.7770) and GPS + Radar (0.7794) are within noise, so radar
 is no better than LiDAR as a cheap partner.
 
-**3. GPS alone is the real cheap tier: DBA 0.7298 at 0.39 GFLOPs** — 83 % of the
+**3. GPS alone is the real cheap tier: DBA 0.7298 at 0.39 GFLOPs** *(see §13 —
+this requires high-precision positioning)* — 83 % of the
 full model's DBA for **0.4 % of its compute**, a 240× ratio. The most consequential
 number in the table.
 
@@ -376,8 +377,10 @@ samples, not a property of the method. And the original single `ORACLE` curve
 was ordered by the Top-1 criterion, which is not optimal for DBA; corrected, the
 ceiling is higher (26 % escalation rather than 33 %).
 
-**Still outstanding:** `modality_robustness.ipynb` and
-`modality_quality_signal.ipynb` are built but not yet run; scenario 31's full
+**Still outstanding:** `modality_quality_signal.ipynb` has been run twice but
+both runs are void — its sensor-quality features were identically zero, so
+feature group C was never tested; the bug is fixed and it needs re-running.
+Scenario 31's full
 release (7,012 samples) is needed for the generalisation claim, which currently
 rests on n=50; and every number in this document is a single training run with
 no seeds or error bars.

@@ -44,7 +44,8 @@ multimodal model is Pareto-dominated**.
 0.8789). GPS + LiDAR (0.7770) and GPS + Radar (0.7794) are within noise of each
 other, so radar is no better than LiDAR as a cheap partner.
 
-**3. GPS alone is the real cheap tier: DBA 0.7298 at 0.39 GFLOPs** — 83 % of the
+**3. GPS alone is the real cheap tier: DBA 0.7298 at 0.39 GFLOPs** *(requires
+high-precision positioning — see ../modality_robustness/)* — 83 % of the
 full model's DBA for **0.4 % of its compute**, a 240x ratio. This is the single
 most consequential number in the table for the resource-efficiency direction.
 

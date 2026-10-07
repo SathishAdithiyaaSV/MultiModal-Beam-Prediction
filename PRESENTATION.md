@@ -156,7 +156,7 @@ cheap baseline". **It isn't.** That premise is dead, and finding that out cost
 ## 9 · Finding 3 — GPS alone is remarkably strong
 
 **DBA 0.7298 at 0.39 GFLOPs** —
-**83 % of the full model's DBA for 0.4 % of its compute.**
+**83 % of the full model's DBA for 0.4 % of its compute.** *(Qualified: this assumes DeepSense's high-precision positioning — at 5 m consumer-GNSS error GPS alone drops to 0.4367 DBA. See the robustness results.)*
 
 A **243× compute ratio.**
 
@@ -494,7 +494,8 @@ lidar **−0.0003**, radar **−0.0012**, gps −0.0214, image **−0.4373**.
 ### The one-sentence summary
 
 *A two-modality model beats the full four-modality one at half the compute;
-GPS alone gets 83 % of the way at 0.4 % of the cost; camera — the only expensive
+GPS alone gets 83 % of the way at 0.4 % of the cost, though only with
+high-precision positioning; camera — the only expensive
 modality that pays — is also the one that fails on unseen environments; and
 per-sample routing has real headroom (+0.089 Top-1 at a quarter of the compute)
 that confidence thresholding cannot reach but a small learned gate partly can,

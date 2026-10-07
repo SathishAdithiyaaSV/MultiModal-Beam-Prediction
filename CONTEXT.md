@@ -163,7 +163,7 @@ All metrics on `val` (n=2,198) unless stated. **DBA** = Distance-Based Accuracy,
 Findings:
 - **The best model is the second-cheapest.** GPS + Camera beats the full
   four-modality model at half the compute. The Pareto frontier ends there.
-- **GPS alone gets 83 % of full DBA at 0.4 % of the compute** (240× cheaper).
+- **GPS alone gets 83 % of full DBA at 0.4 % of the compute** (240× cheaper). *(Qualified: this assumes DeepSense's high-precision positioning — at 5 m consumer-GNSS error GPS alone drops to 0.4367 DBA. See the robustness results.)*
 - **Radar does not pay** (+0.050 DBA for 23.2 GFLOPs, and it *hurts* when added
   to camera). This killed the original "Radar+GPS cheap tier" premise.
 - **The camera generalisation trap.** Camera configurations average 0.8764 on
