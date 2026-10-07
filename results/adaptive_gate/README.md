@@ -1,99 +1,71 @@
 # Adaptive gate (RQ4) — learned sample-adaptive routing
 
 Does a small learned gate, fed only inference-available signals, route better
-than a plain confidence threshold? The oracle-routing study set the stakes:
-perfect routing reaches the always-expensive DBA at a fraction of its cost,
-and a confidence threshold claims almost none of that headroom.
+than a plain confidence threshold? **Yes.** On the full `val` split a gate
+regressing the per-sample DBA gain reaches the always-expensive DBA for **34 %
+less compute, against a confidence threshold's 13 %**, and transfers to
+held-out scenarios.
 
 Produced by [`notebooks/learned_adaptive_gate.ipynb`](../../notebooks/learned_adaptive_gate.ipynb).
 
 | run | status |
 |---|---|
-| [`quick_run/`](quick_run/) | **smoke test only — `QUICK_RUN = True`.** Not a result. |
-| full run | **not yet performed.** This is the blocking next step. |
+| [`full_run/`](full_run/) | **the result.** 8,844 train / 2,198 eval. |
+| [`quick_run/`](quick_run/) | smoke test, `QUICK_RUN = True`, 400/300. Superseded; do not cite. |
 
-## Why `quick_run/` cannot answer the question
+## Result
 
-`QUICK_RUN = True` caps the run at **400 training and 300 evaluation samples**.
-The gate is a 2,113-parameter MLP over **31 features**. Fitting that on 400
-samples is roughly 68 parameters per sample, so the learned gates are not being
-given a fair test, and every evaluation number carries a binomial standard
-error near ±0.03 DBA on n = 300. Differences below ~0.06 are not readable.
+Escalation needed to reach always-expensive DBA (0.8835), cheap tier GPS at
+0.39 GFLOPs, expensive tier GPS + Camera at 48.24:
 
-The run's purpose was to prove the notebook executes end to end. It does, with
-no errors. That is the whole of what it establishes.
+| policy | escalated | GFLOPs | compute saved |
+|---|---|---|---|
+| oracle (DBA-optimal) | 26 % | 12.83 | 73 % |
+| **learned gate (`regress_gain`)** | **66 %** | **31.97** | **34 %** |
+| learned gate (`classify`) | 84 % | 40.58 | 16 % |
+| confidence threshold | 87 % | 42.02 | 13 % |
 
-## What it nevertheless showed
+`regress_gain` beats confidence at every escalation budget (+0.027 DBA at 10 %,
++0.017 at 25 %, +0.011 at 50 %, against a ±0.011 standard error on paired
+comparisons over 2,198 samples), and recovers 63–76 % of the cheap→expensive
+gap on held-out scenarios.
 
-Cheap tier GPS (0.39 GFLOPs), expensive tier GPS + Camera (48.24), so
-`cost(f) = 0.3869 + f * (48.2398 - 0.3869)` for escalated fraction `f`.
-Always-expensive reference: DBA 0.8936, Top-1 0.4700.
+Two secondary conclusions:
 
-| curve | esc. to match | DBA@10% | DBA@25% | DBA@50% |
-|---|---|---|---|---|
-| oracle (DBA-optimal) | 21 % | 0.8458 | 0.9033 | 0.9253 |
-| learned gate (`regress_gain`) | 99 % | **0.8271** | **0.8442** | **0.8682** |
-| confidence threshold | 89 % | 0.8044 | 0.8429 | 0.8636 |
-| learned gate (`classify`) | 96 % | 0.7893 | 0.8098 | 0.8358 |
+- **The regression objective is the right one.** Predicting the continuous DBA
+  gain matches the metric; predicting the binary "cheap wrong, expensive right"
+  label discards how much each sample gains. `classify` loses to a plain
+  confidence threshold below 50 % escalation and should be dropped.
+- **About a third of the oracle headroom is now claimed**, measured on
+  escalation-to-match. The rest remains open.
 
-Three readings, all provisional:
+Full discussion, cross-scenario numbers and the file inventory are in
+[`full_run/README.md`](full_run/README.md).
 
-1. **The regression objective beats the classification one**, by 0.03–0.04 DBA
-   throughout. This was the a-priori expectation and it held: predicting the
-   continuous DBA gain matches the metric being optimised, whereas predicting
-   the binary "cheap wrong, expensive right" label discards how *much* a
-   sample stands to gain. `classify` is beaten by a plain confidence threshold
-   and should be dropped.
-2. **`regress_gain` edges out confidence only in the low-escalation regime**
-   (+0.023 at 10 %, +0.001 at 25 %, +0.005 at 50 %) and loses above ~75 %.
-   The low-escalation regime is the one that matters — it is where compute is
-   actually saved — but at this sample size only the 10 % figure is near the
-   noise floor, not clearly above it.
-3. **Most of the oracle headroom is unclaimed.** The oracle matches
-   always-expensive DBA at 21 % escalation; the best realisable gate needs
-   99 %. This is the open problem, unchanged by this run.
+## Why `quick_run/` is kept but not cited
 
-Held-out-scenario transfer (`cross_scenario_generalisation.csv`) is weak: at
-50 % escalation the gate recovers 45 % of the cheap→expensive gap on scenario
-32 but only 4 % on 33 and 7 % on 34. Consistent with a gate fitted on 400
-samples; must be re-read after the full run.
+It capped the run at 400 training samples for a 2,113-parameter gate over 31
+features, and concluded `regress_gain` was within noise of confidence (+0.001
+DBA at 25 %). The full run shows that was an artefact of an unfitted gate, not
+a property of the method. It is retained as the record of the smoke test that
+verified the notebook executes, and because it is what exposed the oracle bug.
 
-## Correction applied after this run
+## Oracle correction
 
-The notebook labelled a single curve `ORACLE (upper bound)` and ordered it by
-the **Top-1** criterion "cheap wrong and expensive right". That is the optimal
-order for Top-1, but **not for DBA**, which is maximised by ordering on the
-per-sample DBA gain. The consequence was visible in these outputs: at 10 %
-escalation `regress_gain` scored 0.8271 against an "oracle" of 0.8236 — a gate
-appearing to beat its own ceiling, which is impossible and was the tell.
+Both runs executed the notebook before the oracle-ordering fix. A single
+`ORACLE (upper bound)` curve was ordered by the Top-1 criterion "cheap wrong
+and expensive right", which is optimal for Top-1 but **not** for DBA — that is
+maximised by ordering on the per-sample DBA gain. The tell appeared in the
+quick run, where `regress_gain` scored 0.8271 against an "oracle" of 0.8236 at
+10 % escalation, beating a ceiling.
 
-The true DBA-optimal oracle is **higher** than was plotted (0.9033 vs 0.8620 at
-25 % escalation) and reaches the always-expensive DBA at **21 %, not 30 %**.
-The headroom is larger than the quick run reported, so the finding that the gap
-is mostly unclaimed is strengthened, not weakened.
+Corrected, the DBA oracle is **higher** than plotted and matches
+always-expensive at 26 % escalation rather than 33 %, so the headroom is larger
+than either run reported. `full_run/operating_curves_oracle_corrected.csv`
+holds the exact recomputation from the per-sample tables.
 
-`notebooks/_build_adaptive_nbs.py` now emits two separately-ordered curves,
-`ORACLE (Top-1 optimal)` and `ORACLE (DBA optimal)`, each plotted only on the
-panel for the metric it bounds. The CSVs in `quick_run/` predate the fix and
-retain the mislabelled curve; `quick_run/README.md` records this.
-
-## Files
-
-| file | contents |
-|---|---|
-| `config.json` | run configuration, feature list, cost model, leakage note |
-| `operating_curves.csv` | DBA / Top-1 / GFLOPs at 101 escalation fractions per gate |
-| `final_comparison.csv` | gates at DBA-matched and 25 % operating points, against the fixed configurations |
-| `cross_scenario_generalisation.csv` | leave-one-scenario-out transfer |
-| `table_train_quick.csv`, `table_val_quick.csv` | cached per-sample features, both tiers' outcomes, and the gate targets |
-| `plots/accuracy_vs_cost.png` | DBA and Top-1 against average GFLOPs |
-| `notebook_as_run.ipynb` | the executed notebook, with outputs |
-
-`table_*_quick.csv` hold the beam label and per-sample DBA. Those are the gate's
-offline *supervision*; the 31 columns listed in `config.json` are its *inputs*.
-No label-derived column is ever an input — see the leakage note in `config.json`.
-
-## Next step
-
-Re-run with `QUICK_RUN = False` (full `train` / `val` splits). Nothing else in
-this experiment can be concluded until then.
+[`notebooks/_build_adaptive_nbs.py`](../../notebooks/_build_adaptive_nbs.py)
+now emits `ORACLE (Top-1 optimal)` and `ORACLE (DBA optimal)` as separate
+curves, each plotted only on the panel for the metric it bounds. Only the
+oracle rows were ever affected; the confidence and learned-gate curves in both
+runs stand as produced.
