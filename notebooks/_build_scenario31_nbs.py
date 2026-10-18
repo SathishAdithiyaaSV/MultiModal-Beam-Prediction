@@ -70,8 +70,22 @@ frames dominate. Internet must be on (the code is cloned).
 import os, sys, subprocess
 from pathlib import Path
 
-RAW = Path("/kaggle/input/deepsense6g/scenario31")
-assert RAW.is_dir(), f"{RAW} not found -- attach the deepsense6g dataset"
+# Find the release rather than assuming where Kaggle mounted it: the input
+# directory name follows the dataset slug, and the scenario folder can sit at
+# any depth inside it.
+RAW = None
+for c in Path("/kaggle/input").rglob("scenario31_dev.csv"):
+    RAW = c.parent
+    break
+if RAW is None:
+    for c in Path("/kaggle/input").rglob("scenario31"):
+        if c.is_dir() and (c / "unit1").is_dir():
+            RAW = c
+            break
+assert RAW is not None, (
+    "scenario31 not found under /kaggle/input -- attach flippedliu/deepsense6g. "
+    f"Present: {[p.name for p in Path('/kaggle/input').iterdir()]}")
+print("release at", RAW)
 
 # The expensive failure is discovering after four hours of radar FFTs that a
 # modality was never shipped. Check first, cheaply.
