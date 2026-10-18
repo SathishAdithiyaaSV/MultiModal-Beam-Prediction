@@ -209,7 +209,8 @@ def assign_splits(rows, mode, train_frac, block, seed, gap):
     # held-out sources keep their own name; nothing derived from development
     # is ever called 'test'
     rows["split"] = rows["source"].map(
-        {"development": "train", "adaptation": "adaptation", "test": "test"})
+        {"development": "train", "adaptation": "adaptation", "test": "test",
+         "scenario31_full": "scenario31_full"})
 
     # rows with no usable target cannot be fit or scored on. The official test
     # release is legitimately unlabelled, so it is exempt.
@@ -255,6 +256,10 @@ def main():
     ap.add_argument("--block", type=int, default=config.SPLIT_BLOCK)
     ap.add_argument("--session-gap", type=int, default=config.SESSION_GAP)
     ap.add_argument("--seed", type=int, default=config.SPLIT_SEED)
+    ap.add_argument("--gps-norm-from", default=None,
+                    help="reuse GPS min-max constants from an existing "
+                         "gps_norm.json instead of fitting. Required when "
+                         "indexing held-out data with no train split.")
     a = ap.parse_args()
 
     sources = config.available_sources()
@@ -290,14 +295,36 @@ def main():
     # ---- GPS min-max fit on the TRAIN split only (AMBER eq. 12)
     tr = rows["split"] == "train"
     cols = ["ue_x_1", "ue_y_1", "ue_x_2", "ue_y_2"]
-    gps_norm = {c: {"min": float(np.nanmin(rows.loc[tr, c])),
-                    "max": float(np.nanmax(rows.loc[tr, c]))} for c in cols} if tr.any() else {}
+    if a.gps_norm_from:
+        # Building an index for held-out data alone, with no train split to fit
+        # on. The constants MUST be the ones the models were trained under --
+        # refitting (or leaving them empty) would put GPS on a different scale
+        # and silently invalidate every number measured against those weights.
+        src = json.loads(Path(a.gps_norm_from).read_text())
+        gps_norm = src["columns"]
+        if not gps_norm:
+            raise SystemExit(f"{a.gps_norm_from} carries no constants")
+        print(f"  gps norm: reused from {a.gps_norm_from}")
+        # A held-out scenario can sit outside the training area entirely, in
+        # which case these clip to the [0,1] boundary. That is the honest
+        # deployment behaviour, but it does degrade GPS there, so report it.
+        for c in cols:
+            lo, hi = gps_norm[c]["min"], gps_norm[c]["max"]
+            v = rows[c].to_numpy(dtype=float)
+            out = float(np.mean((v < lo) | (v > hi)))
+            if out > 0.01:
+                print(f"    WARNING {c}: {out:.1%} of values outside the "
+                      f"training range -- these clip")
+    else:
+        gps_norm = {c: {"min": float(np.nanmin(rows.loc[tr, c])),
+                        "max": float(np.nanmax(rows.loc[tr, c]))} for c in cols} if tr.any() else {}
 
     config.INDEX_DIR.mkdir(parents=True, exist_ok=True)
     rows.to_csv(config.INDEX_DIR / "samples.csv", index=False)
     np.save(config.INDEX_DIR / "beam_pwr.npy", pwr)
     (config.INDEX_DIR / "gps_norm.json").write_text(json.dumps(
-        {"fit_on": "split == 'train'", "columns": gps_norm,
+        {"fit_on": (f"reused from {a.gps_norm_from}" if a.gps_norm_from
+                    else "split == 'train'"), "columns": gps_norm,
          "apply": "(v - min) / (max - min), clip to [0,1] for unseen extremes"}, indent=2))
     (config.INDEX_DIR / "meta.json").write_text(json.dumps({
         "pipeline": "AMBER (Wen et al.) preprocessing, DeepSense6G scenarios 31-34",

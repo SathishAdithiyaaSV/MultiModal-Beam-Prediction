@@ -42,6 +42,12 @@ SOURCES = {
     "development": RAW / "development",
     "adaptation": RAW / "adaptation",
     "test": RAW / "test",
+    # The standalone scenario-31 release, converted to challenge format by
+    # adapt_scenario31.py. Held out whole and never trained on: it is the only
+    # out-of-domain evaluation data we have, and training on it would destroy
+    # the unseen-scenario claim it exists to test. 6,804 samples against the
+    # 50 that `adaptation` supplies.
+    "scenario31_full": RAW / "scenario31_full",
 }
 
 # The official index csv inside each source. The test release has shipped under
@@ -52,6 +58,7 @@ SOURCE_CSV_NAMES = {
     "test": ["ml_challenge_test_multi_modal.csv",
              "ml_challenge_data_test_multi_modal.csv",
              "ml_challenge_challenge_multi_modal.csv"],
+    "scenario31_full": ["scenario31_challenge_format.csv"],
 }
 
 
@@ -140,7 +147,7 @@ SPLIT_SEED = 2022
 SESSION_GAP = 10
 
 # Splits that must never be trained or selected on.
-HELD_OUT_SPLITS = ("adaptation", "test")
+HELD_OUT_SPLITS = ("adaptation", "test", "scenario31_full")
 # Splits carrying no usable target.
 UNUSABLE_SPLITS = ("no_target", "excluded_nan_pwr")
 
