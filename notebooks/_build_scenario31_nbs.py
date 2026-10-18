@@ -220,7 +220,7 @@ on.
 
 Needs the preprocessed scenario-31 dataset produced by
 `scenario31_preprocess.ipynb`, plus the checkpoint datasets. GPU, under an hour.
-"""))
+""")]
     C.append(md("## 1. Setup"))
     C.append(code(rf'''
 import os, sys, json, subprocess, time
