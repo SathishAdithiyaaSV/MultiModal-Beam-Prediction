@@ -1,0 +1,30 @@
+{
+  "seeds": 20,
+  "bootstrap": 2000,
+  "n_eval": 2198,
+  "n_features_live": 12,
+  "dead_features": [
+    "avail_image",
+    "avail_lidar",
+    "avail_radar",
+    "avail_beam",
+    "avail_gps",
+    "avail_count",
+    "img_sharpness",
+    "img_sharpness_coarse",
+    "img_hf_ratio",
+    "img_dark_frac",
+    "img_temporal_change",
+    "lidar_points",
+    "lidar_occupancy",
+    "lidar_mean_count",
+    "lidar_temporal_change",
+    "radar_peak",
+    "radar_mean",
+    "radar_peak_to_mean",
+    "radar_energy_frac_top1pct"
+  ],
+  "esc_to_match_mean": 0.768,
+  "esc_to_match_sd": 0.12619825672330026,
+  "compute_saved_mean": 0.2301392791844079
+}

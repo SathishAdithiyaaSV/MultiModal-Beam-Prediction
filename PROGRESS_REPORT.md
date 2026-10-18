@@ -22,7 +22,7 @@ Five results, in the order they build on each other.
 | 2 | **GPS alone reaches 83 % of full accuracy for 0.4 % of the compute** — a 240× cost gap, and the opportunity the rest of the work exploits. |
 | 3 | **The camera is the only modality that pays for itself, and it is also the one that fails on unseen environments** — and it degrades below free GPS under mild blur. |
 | 4 | **Perfect per-sample routing would beat the always-expensive model at a quarter of its compute.** The headroom is real and measured. |
-| 5 | **A small learned gate captures a third of that headroom** — 34 % of compute saved at matched accuracy, against 13 % for the standard confidence baseline. |
+| 5 | **A small learned gate beats every standard routing rule** — +0.027 DBA at 10 % escalation, +0.019 at 25 %, bootstrap CIs excluding zero, stable across twenty seeds. |
 
 One analysis is still outstanding; it is identified in *Work remaining*.
 
@@ -205,12 +205,14 @@ predicting *how much* it helps.
 
 **Escalation required to match always-expensive accuracy:**
 
-| policy | escalated | GFLOPs | compute saved |
-|---|---|---|---|
-| perfect routing (ceiling) | 26 % | 12.83 | 73 % |
-| **learned gate — predict gain** | **66 %** | **31.97** | **34 %** |
-| learned gate — predict yes/no | 84 % | 40.58 | 16 % |
-| confidence threshold | 87 % | 42.02 | 13 % |
+| policy | escalated | compute saved |
+|---|---|---|
+| perfect routing (ceiling) | 26 % | 73 % |
+| **learned gate — predict gain** | **77 % ± 13 %** | **23 % ± 13 %** |
+| confidence threshold | 87 % | 13 % |
+
+*Measured over twenty seeds. A single seed gave 66 %, but this statistic is
+unstable — see below.*
 
 **Accuracy at fixed compute budgets:**
 
@@ -221,11 +223,20 @@ predicting *how much* it helps.
 | confidence threshold | 0.7653 | 0.8199 | 0.8557 |
 | learned gate — predict yes/no | 0.7552 | 0.7958 | 0.8393 |
 
+**Accuracy at fixed budgets is where the result is solid.** Twenty seeds and a
+2,000-resample paired bootstrap:
+
+| budget | gate (20 seeds) | confidence | gap | 95 % CI | p(gate > conf) |
+|---|---|---|---|---|---|
+| 10 % | 0.7924 ± 0.0017 | 0.7653 | **+0.0274** | [+0.0220, +0.0328] | 100 % |
+| 25 % | 0.8354 ± 0.0037 | 0.8199 | **+0.0185** | [+0.0127, +0.0242] | 100 % |
+| 50 % | 0.8673 ± 0.0029 | 0.8557 | **+0.0151** | [+0.0105, +0.0200] | 100 % |
+
 Three points:
 
-1. **The gate beats confidence thresholding at every budget** — +0.027 DBA at
-   10 % escalation, +0.017 at 25 %, against a ±0.011 paired standard error. It
-   saves **34 % of compute where confidence saves 13 %**, roughly 2.6×.
+1. **The gate beats confidence thresholding at every budget**, with seed
+   standard deviation under 0.004 and every bootstrap interval excluding zero
+   by a wide margin. This is the claim we stand behind.
 2. **Predicting the magnitude of the gain clearly beats predicting a yes/no
    label**, by 0.03–0.04 DBA throughout. The binary formulation discards how
    *much* each sample stands to gain, and loses even to plain confidence below
@@ -233,6 +244,24 @@ Three points:
 3. **The gate transfers.** Trained without a given scenario and tested on it, it
    recovers **72 % / 63 % / 76 %** of the cheap-to-expensive gap on scenarios
    32 / 33 / 34.
+
+### A correction we are making to ourselves
+
+An earlier version of this report led with "34 % of compute saved against
+confidence's 13 %". That came from a **single seed**. Across twenty, escalation
+to match is **76.8 % ± 12.6 %** — and three seeds never match at all. The
+honest saving is **23 % ± 13 %**.
+
+The cause is statistical rather than a defect. "Escalation needed to match" is
+a threshold crossing on a curve that is nearly flat near the target, so a DBA
+shift of 0.002 moves it by tens of percent. It is too brittle to carry a
+headline. The fixed-budget numbers measure the same advantage stably, and are
+what we now lead with.
+
+**The gate also turns out to use 12 features, not 31** — nineteen are constant
+and contribute nothing. That strengthens rather than weakens the finding:
+twelve cheap signals beat the entire classical rejection-score family. It also
+means the sensor-quality idea remains genuinely untested.
 
 ### It beats the whole uncertainty family, not just confidence
 
@@ -274,9 +303,10 @@ difficulty. Both halves failed on evidence: radar does not pay for itself, and
 difficulty measures score below plain confidence. The replacement — a GPS cheap
 tier with a learned gain-regression gate — outperforms both.
 
-**We have a quantified efficiency result:** 34 % compute saved at matched
-accuracy against 13 % for the standard baseline, with demonstrated
-cross-scenario transfer.
+**We have a quantified efficiency result:** the gate beats confidence
+thresholding and all five other standard rejection scores at every escalation
+budget, with bootstrap intervals excluding zero and seed variation under 0.004,
+plus demonstrated cross-scenario transfer.
 
 **But our strongest contribution may not be the routing work.** The evidence
 points at a more uncomfortable and more interesting claim: *most modalities in
@@ -293,7 +323,8 @@ result; present the routing work as its constructive answer.
 ## 9 · Limitations we would state in any write-up
 
 - **Single training run per configuration** — no seeds, no error bars. Some
-  close orderings (0.8835 vs 0.8759) may not survive repetition.
+  close orderings (0.8835 vs 0.8759) may not survive repetition. The *gate* now
+  has twenty seeds and bootstrap intervals; the *backbone* does not.
 - **Scenario 31 provides 50 labelled samples.** The generalisation claim rests
   on the consistent ordering across configurations, not on individual values.
 - **The GPS-alone headline assumes high-precision positioning**, as shown above.

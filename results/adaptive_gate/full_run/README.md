@@ -51,6 +51,70 @@ The quick run had suggested `regress_gain` was within noise of confidence
 400 samples. With 8,844 the advantage is unambiguous — which is exactly why the
 quick run was not reportable.
 
+## Error bars — and a correction to the headline
+
+The gate is a 2,113-parameter MLP over cached features, so unlike the model
+tiers it can be refit many times on a laptop. `uncertainty/` reports twenty
+seeds and a 2,000-resample paired bootstrap over the evaluation samples. The
+two tell different stories and the difference matters.
+
+### What is solid
+
+**The gate beats confidence thresholding at every escalation budget**, and this
+survives both tests comfortably:
+
+| budget | gate (20 seeds) | confidence | gap | 95 % bootstrap CI | p(gate > conf) |
+|---|---|---|---|---|---|
+| 10 % | 0.7924 ± 0.0017 | 0.7653 | **+0.0274** | [+0.0220, +0.0328] | 100 % |
+| 25 % | 0.8354 ± 0.0037 | 0.8199 | **+0.0185** | [+0.0127, +0.0242] | 100 % |
+| 50 % | 0.8673 ± 0.0029 | 0.8557 | **+0.0151** | [+0.0105, +0.0200] | 100 % |
+
+Seed standard deviation is at most 0.0037, and every bootstrap interval
+excludes zero by a wide margin. This claim is safe to make.
+
+### What is not
+
+**The "66 % escalation / 34 % compute saved" headline was a single seed, and it
+does not hold.** Across twenty seeds:
+
+| | value |
+|---|---|
+| escalation to match always-expensive | **76.8 % ± 12.6 %** (range 62–100 %) |
+| compute saved | **23 % ± 13 %** |
+| seeds that never match | **3 of 20** |
+
+Seed 0 — the one the original run used — gave 66 %, near the optimistic end.
+The honest figure is about **77 %, against confidence's 87 %**, and three seeds
+in twenty never reach always-expensive accuracy at any escalation level.
+
+The cause is statistical, not a bug. "Escalation needed to match" is a
+threshold crossing on a curve that is nearly flat as it approaches the target,
+so a DBA change of 0.002 moves the crossing point by tens of percent. It is a
+brittle statistic and should not carry a headline. The DBA-at-fixed-budget
+numbers above measure the same advantage stably, and are what we now lead with.
+
+### A third finding: the gate uses 12 features, not 31
+
+Nineteen of the thirty-one are constant on the training split and contribute
+exactly nothing — the thirteen sensor-quality statistics (the zero-tensor
+defect recorded in `../../quality_signal/`) plus six availability bits that
+never vary. The gate actually runs on:
+
+`top1_conf`, `top2_conf`, `margin_12`, `margin_15`, `entropy`, `top5_mass`,
+`pred_beam_norm`, `gps_step`, `gps_step_x`, `gps_step_y`, `gps_at_boundary`,
+`gps_radius`.
+
+This does not weaken the result — it strengthens it. **Twelve cheap features,
+seven of them free from the cheap model's own output distribution, beat the
+entire classical rejection-score family.** It also means the sensor-quality
+idea is genuinely untested rather than tested and found wanting.
+
+### Scope
+
+This bounds the *gate*, not the backbone. The tiers themselves are still single
+runs, so the configuration-level numbers (0.8835, 0.8759, and the rest) carry
+no error bars yet.
+
 ## Comparison against the selective-prediction literature
 
 "Learned gate beats confidence" is a weak claim if confidence is the only

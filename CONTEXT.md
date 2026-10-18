@@ -233,8 +233,17 @@ DBA at fixed escalation budgets:
 | confidence threshold | 0.7653 | 0.8199 | 0.8557 | 0.8763 |
 | `classify` | 0.7552 | 0.7958 | 0.8393 | 0.8759 |
 
-- **The learned gate beats confidence thresholding at every budget** (+0.027 DBA
-  at 10 % escalation, +0.017 at 25 %), saving **34 % of compute vs 13 %**.
+- **The learned gate beats confidence thresholding at every budget**: +0.0274
+  DBA at 10 % escalation, +0.0185 at 25 %, +0.0151 at 50 %. Twenty seeds give
+  sd <= 0.004 and 2,000-resample bootstrap CIs exclude zero (p = 100 %).
+  **This is the solid claim.**
+- **CORRECTION: the "66 % escalation / 34 % saved" headline was one seed.**
+  Across twenty: 76.8 % +- 12.6 %, three never matching, compute saved
+  23 % +- 13 %. "Escalation to match" is a threshold crossing on a near-flat
+  curve and is too brittle to headline. Lead with fixed-budget DBA instead.
+- **The gate uses 12 live features, not 31** -- nineteen are constant (the 13
+  zeroed sensor-quality ones plus six invariant availability bits). Twelve
+  cheap signals beat the whole classical rejection-score family.
 - **The regression objective is the right one.** Predicting the continuous DBA
   gain matches the metric; predicting the binary "cheap wrong, expensive right"
   label discards *how much* each sample gains. `classify` loses to plain
