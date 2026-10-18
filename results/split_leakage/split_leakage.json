@@ -1,0 +1,22 @@
+{
+  "window": 5,
+  "n_samples": 11042,
+  "val_frac": 0.19905814164100707,
+  "block_split": {
+    "n_val": 2198,
+    "share_overlapping": 0.13603275705186532,
+    "share_adjacent": 0.034121929026387623,
+    "share_within_10": 0.327115559599636,
+    "median_gap": 16.0
+  },
+  "random_split_mean": {
+    "n_val": 2198.0,
+    "share_overlapping": 0.9999545040946314,
+    "share_adjacent": 0.9528889899909009,
+    "share_within_10": 1.0,
+    "median_gap": 1.0
+  },
+  "random_trials": 20,
+  "p_same_beam_1_frame": 0.3939895230217811,
+  "chance": 0.015625
+}

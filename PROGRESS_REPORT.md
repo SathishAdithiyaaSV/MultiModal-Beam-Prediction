@@ -22,7 +22,8 @@ Five results, in the order they build on each other.
 | 2 | **GPS alone reaches 83 % of full accuracy for 0.4 % of the compute** — a 240× cost gap, and the opportunity the rest of the work exploits. |
 | 3 | **The camera is the only modality that pays for itself, and it is also the one that fails on unseen environments** — and it degrades below free GPS under mild blur. |
 | 4 | **Perfect per-sample routing would beat the always-expensive model at a quarter of its compute.** The headroom is real and measured. |
-| 5 | **A small learned gate beats every standard routing rule** — +0.027 DBA at 10 % escalation, +0.019 at 25 %, bootstrap CIs excluding zero, stable across twenty seeds. |
+| 5 | **A random split on this dataset leaks 100 % of validation samples**, which explains the gap to published accuracy figures. |
+| 6 | **A small learned gate beats every standard routing rule** — +0.027 DBA at 10 % escalation, +0.019 at 25 %, bootstrap CIs excluding zero, stable across twenty seeds. |
 
 One analysis is still outstanding; it is identified in *Work remaining*.
 
@@ -320,6 +321,45 @@ result; present the routing work as its constructive answer.
 
 ---
 
+## 10 · Why our accuracy is lower than the published figure
+
+We report Top-1 **0.4604**; the AMBER paper reports **0.6415**. We can now
+explain that with measurements rather than assertion — and it turns out to be a
+contribution in its own right.
+
+**The mechanism.** Each sample is five consecutive observations. Two samples
+whose targets differ by fewer than five frames **share actual input frames** —
+the same image, LiDAR sweep and radar cube on both sides of the split.
+
+**What a random split does**, over 11,042 samples and 20 draws:
+
+| | block split (ours) | random split |
+|---|---|---|
+| val samples sharing input frames with train | **13.6 %** | **100.0 %** |
+| val samples within 1 frame of train | 3.4 % | 95.3 % |
+| median frames to nearest train sample | **16** | **1** |
+
+**Under a random split, every validation sample shares input frames with
+training data.** And the label barely moves — a sample one frame away carries
+the same beam **39.4 %** of the time, against 1.6 % chance, a 25× lift.
+
+So a randomly-split evaluation on DeepSense6G is not chiefly measuring
+generalisation to new moments; it is substantially measuring recall of frames
+already seen. Our numbers are lower because they are measured on genuinely
+held-out time. **Random splitting is common on this dataset, so this is worth
+reporting as a methodological finding.**
+
+**Where our own split falls short.** 13.6 % of our validation samples still
+overlap training windows — block boundaries create adjacent pairs. Far better
+than 100 %, but not zero, and we should not claim a clean split while one in
+seven overlaps. A **guard band** dropping samples within 4 frames of a boundary
+would take it to exactly 0 % for about 8 % of the data. Worth doing before
+submission, reported both ways.
+
+*Detail: [results/split_leakage/](results/split_leakage/)*
+
+---
+
 ## 9 · Limitations we would state in any write-up
 
 - **Single training run per configuration** — no seeds, no error bars. Some
@@ -328,10 +368,9 @@ result; present the routing work as its constructive answer.
 - **Scenario 31 provides 50 labelled samples.** The generalisation claim rests
   on the consistent ordering across configurations, not on individual values.
 - **The GPS-alone headline assumes high-precision positioning**, as shown above.
-- **Our Top-1 is 0.4604; the AMBER paper reports 0.6415.** We believe this is
-  our stricter protocol — block-based splits that prevent temporally adjacent
-  frames leaking between train and test, no beam-history input, and no
-  scenario-31 training data. This needs to be demonstrated rather than asserted.
+- **Our Top-1 is 0.4604 against the paper's 0.6415** — now explained and
+  measured, not asserted (section 10). Our own split still leaks 13.6 %, fixable
+  with a guard band.
 - **45 % of samples are wrong under both tiers**, which caps any routing gain.
 - **Routing is measured in-domain.** Transfer is tested by holding out
   scenarios, but scenario 31 cannot be tested that way, having no training data.
@@ -340,7 +379,7 @@ result; present the routing work as its constructive answer.
 
 ---
 
-## 10 · Work remaining
+## 11 · Work remaining
 
 **Outstanding analysis.** One experiment is incomplete: separating routing
 signals by *what they cost to obtain*. Some signals are free before any expensive
@@ -369,7 +408,7 @@ guarded. It needs one ~25-minute re-run.
 
 ---
 
-## 11 · Decisions we would like to take
+## 12 · Decisions we would like to take
 
 1. **Framing** — do we lead with modality economics and generalisation, or with
    adaptive routing?
