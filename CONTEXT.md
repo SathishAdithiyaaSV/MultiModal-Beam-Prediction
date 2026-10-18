@@ -338,10 +338,12 @@ the per-sample tables.
    what others report on (a defensible position that must be *argued*), or the
    AMBER reimplementation underperforms. This is the highest-priority unknown —
    if it is the latter, every comparison rests on a weak base.
-5. **Benchmark the gate against the real literature** — cascades, early-exit
-   (BranchyNet, MSDNet), learning-to-defer — not only against a confidence
-   threshold. "Learned gate beats confidence" is known there; the novelty here
-   is the multimodal sensor-cost framing.
+5. **Baseline comparison, partly done.** The gate now beats six standard
+   selective-prediction rejection scores (Chow's rule, top1−top2 and top1−top5
+   margins, predictive entropy, 1−top5 mass, Gini): all need 87–94 % escalation
+   against the gate's 66 %. See `results/adaptive_gate/full_run/README.md`.
+   Still missing: a trained learning-to-defer surrogate and architectural
+   early-exit methods (BranchyNet, MSDNet), which need their own training runs.
 
 ### Publication read
 

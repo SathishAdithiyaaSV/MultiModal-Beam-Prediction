@@ -234,6 +234,25 @@ Three points:
    recovers **72 % / 63 % / 76 %** of the cheap-to-expensive gap on scenarios
    32 / 33 / 34.
 
+### It beats the whole uncertainty family, not just confidence
+
+The deferral literature offers a standard set of rejection scores. All of them
+land in the same place:
+
+| routing score | escalation to match |
+|---|---|
+| Chow's rule (max-softmax) | 87 % |
+| margin, top1−top2 | 93 % |
+| margin, top1−top5 | 88 % |
+| predictive entropy | 94 % |
+| 1 − top-5 mass | 88 % |
+| Gini impurity | 89 % |
+| **learned gate** | **66 %** |
+
+They cluster tightly, because they are largely monotone functions of the same
+uncertainty. **The gate's advantage does not come from better-calibrated
+uncertainty — it comes from using information these scores cannot see.**
+
 ### A caution on feature richness
 
 Measured *within* known scenarios, richer features help — that is how the gate
@@ -311,10 +330,11 @@ guarded. It needs one ~25-minute re-run.
    protocol explains the gap, that is defensible and interesting; if the
    reimplementation underperforms, every comparison rests on a weak base. This
    is the highest-priority unknown.
-4. **Benchmark the gate against the adaptive-inference literature** — cascades,
-   early-exit methods, learning-to-defer — rather than only against a confidence
-   threshold. Our novelty is the multimodal sensor-cost framing, and we should
-   say so explicitly.
+4. **Extend the baseline comparison.** The gate is now measured against six
+   standard rejection scores from the selective-prediction literature and beats
+   all of them. Still to add: a trained learning-to-defer surrogate, and
+   architectural early-exit methods (BranchyNet, MSDNet), both of which need
+   their own training runs rather than a rescoring of existing outputs.
 
 ---
 

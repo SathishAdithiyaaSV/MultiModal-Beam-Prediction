@@ -51,6 +51,36 @@ The quick run had suggested `regress_gain` was within noise of confidence
 400 samples. With 8,844 the advantage is unambiguous — which is exactly why the
 quick run was not reportable.
 
+## Comparison against the selective-prediction literature
+
+"Learned gate beats confidence" is a weak claim if confidence is the only
+baseline, since the deferral and selective-prediction literature has a family of
+standard rejection scores. All of them are computable from the cheap model's
+output distribution, which we already have cached per sample, so this costs no
+GPU. Escalation needed to reach always-expensive DBA (0.8835):
+
+| routing score | esc. to match | @10 % | @25 % | @50 % |
+|---|---|---|---|---|
+| Chow's rule (max-softmax) | 87 % | 0.7653 | 0.8199 | 0.8557 |
+| margin, top1−top2 | 93 % | 0.7555 | 0.7933 | 0.8453 |
+| margin, top1−top5 | 88 % | 0.7643 | 0.8137 | 0.8521 |
+| predictive entropy | 94 % | 0.7684 | 0.8083 | 0.8427 |
+| 1 − top-5 mass | 88 % | 0.7645 | 0.8209 | 0.8447 |
+| Gini impurity | 89 % | 0.7658 | 0.8201 | 0.8553 |
+| **learned gate (regress gain)** | **66 %** | **0.7919** | **0.8372** | **0.8662** |
+
+**Every classical rejection score needs 87–94 % escalation; the gate needs
+66 %.** It also leads at every fixed budget. The classical family is tightly
+clustered — they are all monotone functions of much the same uncertainty — which
+is the point: the gate's advantage does not come from a better-calibrated
+uncertainty estimate but from using information those scores do not see.
+
+Raw numbers: `deferral_baselines.csv`.
+
+*Not yet covered:* a trained learning-to-defer surrogate, and architectural
+early-exit methods (BranchyNet, MSDNet) which would require their own training
+runs rather than a rescoring of ours.
+
 ## Cross-scenario generalisation
 
 Leave-one-scenario-out, gate trained without the held-out scenario. Fraction of
