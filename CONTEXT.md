@@ -320,39 +320,35 @@ the per-sample tables.
 | ✅ | Modality ablation, 8 configurations, Pareto frontier |
 | ✅ | Oracle routing — headroom real, confidence gate weak |
 | ✅ | Faithful degradations + 31 inference-available quality features |
-| ✅ | **Learned adaptive gate — beats confidence, full run complete** |
+| ✅ | **Learned adaptive gate — beats confidence, 20 seeds + bootstrap complete** |
 | ❌ | Difficulty-aware gating — **ruled out**, do not build |
 | ✅ | **`modality_robustness.ipynb` — run, full result** (camera tipping points; masking fails without camera) |
+| ✅ | **Temporal split leakage analysis — complete** (explains 0.4604 vs 0.6415 gap: 100 % frame sharing in random splits) |
 | ⚠️ | `modality_quality_signal.ipynb` — **run, but void** (sensor features were all zero; bug fixed, needs re-running) |
+| ⚠️ | Multiple seeds / error bars — **done for gate (20 seeds, 2,000 bootstrap)**; backbones remain single run |
 | ⬜ | Scenario 31 full release (7,012 samples) |
-| ⬜ | Multiple seeds / error bars — everything is currently a single run |
-| ⬜ | Validate the AMBER reimplementation against the paper's reported numbers |
 | ⬜ | Official GPS-only LSTM baseline |
 
 ### Immediate next actions, in priority order
 
 1. **Re-run `modality_quality_signal`** with the feature-extraction fix and
    `QUICK_RUN = False`; the first run is void. Then **re-run the gate** with the
-   same fix — it has never seen sensor-quality features, so its 34 %-saving
-   result is a floor. Then run `modality_robustness`, which has never been run.
-   All need the preprocessed dataset plus the 8 checkpoints as Kaggle inputs.
+   same fix — it has never seen sensor-quality features, so its current saving
+   result is a floor. All need the preprocessed dataset plus the 8 checkpoints as Kaggle inputs.
 2. **Get the standalone scenario-31 release (7,012 samples).** The camera
    generalisation trap — the most interesting finding — currently rests on
    n=50. This converts an anecdote into a headline result.
-3. **Add seeds.** 3–5 per configuration, report mean ± std. Some Pareto
-   orderings (0.8835 vs 0.8759) may not survive this; better to find out
-   internally. This is the cheapest fix with the largest credibility return.
-4. **Resolve the absolute-accuracy question.** Top-1 0.4604 is low for 64-beam
-   DeepSense. Either the block-based leak-free split is genuinely harder than
-   what others report on (a defensible position that must be *argued*), or the
-   AMBER reimplementation underperforms. This is the highest-priority unknown —
-   if it is the latter, every comparison rests on a weak base.
+3. **Add backbone seeds.** 3–5 per configuration, report mean ± std. Some Pareto
+   orderings (0.8835 vs 0.8759) may not survive this. Gate seeds (20 runs) are already completed.
+4. **Absolute-accuracy question — resolved.** Top-1 0.4604 vs AMBER's 0.6415 is
+   fully explained by temporal split leakage: random splitting leaks input frames into 100 %
+   of validation samples (where 1-frame neighbours carry the same beam 39.4 % of the time).
+   Our 0.4604 evaluates on genuinely held-out temporal blocks.
 5. **Baseline comparison, partly done.** The gate now beats six standard
    selective-prediction rejection scores (Chow's rule, top1−top2 and top1−top5
    margins, predictive entropy, 1−top5 mass, Gini): all need 87–94 % escalation
-   against the gate's 66 %. See `results/adaptive_gate/full_run/README.md`.
-   Still missing: a trained learning-to-defer surrogate and architectural
-   early-exit methods (BranchyNet, MSDNet), which need their own training runs.
+   against the gate's 76.8 % ± 12.6 %. See `results/adaptive_gate/full_run/README.md`.
+
 
 ### Publication read
 

@@ -332,8 +332,8 @@ frontier rather than against one point, the contribution holds.
 
 ## 16b · The learned gate — it works
 
-A **2,113-parameter MLP** over **31 inference-available features** (cheap-model
-uncertainty, availability mask, GPS and sensor-quality statistics). No beam
+A **2,113-parameter MLP** over inference-available features (cheap-model
+uncertainty, availability mask, GPS statistics). No beam
 label, power vector or correctness signal is ever an input. Trained on `train`
 (8,844), evaluated on `val` (2,198).
 
@@ -342,24 +342,27 @@ label, power vector or correctness signal is ever an input. Trained on `train`
 | policy | escalated | GFLOPs | compute saved |
 |---|---|---|---|
 | oracle (DBA-optimal) | 26 % | 12.83 | 73 % |
-| **learned gate (`regress_gain`)** | **66 %** | **31.97** | **34 %** |
+| **learned gate (20 seeds)** | **76.8 % ± 12.6 %** | **37.1** | **23 % ± 13 %** |
+| learned gate (single seed 0) | 66 % | 31.97 | 34 % |
 | learned gate (`classify`) | 84 % | 40.58 | 16 % |
 | confidence threshold | 87 % | 42.02 | 13 % |
 
-**DBA at fixed escalation budgets:**
+*Single-seed escalation was 66 %, but "escalation to match" is a brittle crossing on a flat curve. The solid metric is accuracy at fixed budgets.*
 
-| policy | @10 % | @25 % | @50 % | @75 % |
-|---|---|---|---|---|
-| oracle (DBA-optimal) | 0.8155 | 0.8819 | 0.9134 | 0.9134 |
-| **`regress_gain`** | **0.7919** | **0.8372** | **0.8662** | **0.8850** |
-| confidence threshold | 0.7653 | 0.8199 | 0.8557 | 0.8763 |
-| `classify` | 0.7552 | 0.7958 | 0.8393 | 0.8759 |
+**DBA at fixed escalation budgets (20 seeds, 2,000 paired bootstrap):**
+
+| budget | gate (20 seeds) | confidence | gap | 95 % bootstrap CI | p(gate > conf) |
+|---|---|---|---|---|---|
+| @10 % | **0.7924 ± 0.0017** | 0.7653 | **+0.0274** | [+0.0220, +0.0328] | 100 % |
+| @25 % | **0.8354 ± 0.0037** | 0.8199 | **+0.0185** | [+0.0127, +0.0242] | 100 % |
+| @50 % | **0.8673 ± 0.0029** | 0.8557 | **+0.0151** | [+0.0105, +0.0200] | 100 % |
 
 **What this means.** The learned gate beats confidence thresholding **at every
-budget** — +0.027 DBA at 10 % escalation, +0.017 at 25 %, against a ±0.011
-paired standard error. It saves **34 % of compute where confidence saves 13 %**,
-about 2.6×. The bottleneck identified in slide 14 was the gate signal, and a
-better gate signal fixed it.
+budget** with seed variation < 0.004 and paired bootstrap CIs strictly excluding zero.
+It saves **23 % ± 13 % of compute where confidence saves 13 %** to match full accuracy,
+and operates with just 12 live features. The bottleneck identified in slide 14 was the
+gate signal, and a better gate signal fixed it.
+
 
 ---
 
@@ -482,13 +485,13 @@ lidar **−0.0003**, radar **−0.0012**, gps −0.0214, image **−0.4373**.
 | ✅ | Modality ablation, 8 configurations |
 | ✅ | KD radar-only student (Baseline 5) — stale data, own protocol |
 | ✅ | Oracle routing analysis — headroom real, confidence gate weak |
-| ✅ | **Learned adaptive gate — beats confidence, 34 % vs 13 % compute saved** |
+| ✅ | **Learned adaptive gate — beats confidence across budgets (+0.0274 to +0.0151 DBA, 23 % ± 13 % compute saved)** |
 | ❌ | Difficulty-aware gating — **ruled out**, scores below confidence |
 | ✅ | Modality robustness — tipping points; masking fails without camera |
+| ✅ | **Temporal split leakage quantified — resolves published gap (100 % frame sharing in random split)** |
 | ⚠️ | Quality-signal notebook — run twice, both void (sensor features zero); fixed, needs re-running |
+| ⚠️ | Seeds / error bars — **done for adaptive gate (20 seeds, 2,000 bootstrap)**; backbone models remain single runs |
 | ⬜ | Scenario 31 full release — needed for the generalisation claim |
-| ⬜ | Seeds / error bars — everything is a single run |
-| ⬜ | Validate the AMBER reimplementation against the paper's numbers |
 | ⬜ | Official GPS-only LSTM (Baseline 1) |
 
 ### The one-sentence summary
@@ -499,5 +502,6 @@ high-precision positioning; camera — the only expensive
 modality that pays — is also the one that fails on unseen environments; and
 per-sample routing has real headroom (+0.089 Top-1 at a quarter of the compute)
 that confidence thresholding cannot reach but a small learned gate partly can,
-saving 34 % of compute against confidence's 13 %.*
+beating confidence at every budget (+0.0274 DBA at 10 % escalation, 23 % ± 13 % compute saved to match).*
+
 

@@ -21,14 +21,23 @@ Escalation needed to reach always-expensive DBA (0.8835), cheap tier GPS at
 | policy | escalated | GFLOPs | compute saved |
 |---|---|---|---|
 | oracle (DBA-optimal) | 26 % | 12.83 | 73 % |
-| **learned gate (`regress_gain`)** | **66 %** | **31.97** | **34 %** |
+| **learned gate (20 seeds)** | **76.8 % ± 12.6 %** | **37.1** | **23 % ± 13 %** |
+| learned gate (single seed 0) | 66 % | 31.97 | 34 % |
 | learned gate (`classify`) | 84 % | 40.58 | 16 % |
 | confidence threshold | 87 % | 42.02 | 13 % |
 
-`regress_gain` beats confidence at every escalation budget (+0.027 DBA at 10 %,
-+0.017 at 25 %, +0.011 at 50 %, against a ±0.011 standard error on paired
-comparisons over 2,198 samples), and recovers 63–76 % of the cheap→expensive
-gap on held-out scenarios.
+*Note on multi-seed evaluation:* Seed 0 achieved 66 % escalation (34 % compute saved), but "escalation to match" is sensitive near the target. Across 20 seeds, mean escalation is **76.8 % ± 12.6 %** (saving 23 % ± 13 % compute).
+
+**Accuracy at fixed escalation budgets is rock-solid (20 seeds, 2,000 paired bootstrap):**
+
+| budget | gate (20 seeds) | confidence | gap | 95 % bootstrap CI | p(gate > conf) |
+|---|---|---|---|---|---|
+| @10 % | **0.7924 ± 0.0017** | 0.7653 | **+0.0274** | [+0.0220, +0.0328] | 100 % |
+| @25 % | **0.8354 ± 0.0037** | 0.8199 | **+0.0185** | [+0.0127, +0.0242] | 100 % |
+| @50 % | **0.8673 ± 0.0029** | 0.8557 | **+0.0151** | [+0.0105, +0.0200] | 100 % |
+
+`regress_gain` beats confidence at every escalation budget with seed SD < 0.004,
+and recovers 63–76 % of the cheap→expensive gap on held-out scenarios.
 
 Two secondary conclusions:
 
@@ -36,8 +45,8 @@ Two secondary conclusions:
   gain matches the metric; predicting the binary "cheap wrong, expensive right"
   label discards how much each sample gains. `classify` loses to a plain
   confidence threshold below 50 % escalation and should be dropped.
-- **About a third of the oracle headroom is now claimed**, measured on
-  escalation-to-match. The rest remains open.
+- **The gate operates on 12 live features, not 31**, easily beating the entire
+  classical rejection score family (Chow, margins, entropy, Gini).
 
 Full discussion, cross-scenario numbers and the file inventory are in
 [`full_run/README.md`](full_run/README.md).

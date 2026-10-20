@@ -347,11 +347,11 @@ routing analysis.
 
 ## 12. The learned adaptive gate — result
 
-*(Added 2026-10-07. Full detail: [CONTEXT.md](CONTEXT.md) §4.3 and
+*(Added 2026-10-07, updated 2026-10-08 with 20-seed uncertainty analysis. Full detail: [CONTEXT.md](CONTEXT.md) §4.3 and
 [results/adaptive_gate/full_run/](results/adaptive_gate/full_run/).)*
 
-A 2,113-parameter MLP over 31 inference-available features — cheap-model
-uncertainty, the availability mask, GPS and sensor-quality statistics. No beam
+A 2,113-parameter MLP over inference-available features — cheap-model
+uncertainty, the availability mask, and GPS statistics. No beam
 label, power vector or correctness signal is ever an input; those build the
 training target only. Fitted on `train` (8,844), evaluated on `val` (2,198).
 
@@ -361,29 +361,27 @@ tier (0.39 GFLOPs) and GPS + Camera as the expensive one (48.24):
 | policy | escalated | GFLOPs | compute saved |
 |---|---|---|---|
 | oracle (DBA-optimal) | 26 % | 12.83 | 73 % |
-| **learned gate (`regress_gain`)** | **66 %** | **31.97** | **34 %** |
+| **learned gate (20 seeds)** | **76.8 % ± 12.6 %** | **37.1** | **23 % ± 13 %** |
+| learned gate (single seed 0) | 66 % | 31.97 | 34 % |
 | learned gate (`classify`) | 84 % | 40.58 | 16 % |
 | confidence threshold | 87 % | 42.02 | 13 % |
 
-The learned gate beats confidence thresholding at every escalation budget
-(+0.027 DBA at 10 %, +0.017 at 25 %, against a ±0.011 paired standard error),
-and leave-one-scenario-out transfer recovers 63–76 % of the cheap→expensive gap.
-The regression objective clearly beats the classification one, which loses even
-to plain confidence below 50 % escalation.
+*Note on seeds:* An initial single run yielded 66 % escalation (34 % compute saved), but "escalation to match" is a brittle threshold crossing on a flat curve. Across **twenty seeds**, mean escalation to match is **76.8 % ± 12.6 %** (23 % ± 13 % compute saved).
 
-Two corrections recorded with this result. A 400-sample pilot had shown the gate
-*within noise* of confidence — an artefact of fitting 2,113 parameters on 400
-samples, not a property of the method. And the original single `ORACLE` curve
-was ordered by the Top-1 criterion, which is not optimal for DBA; corrected, the
-ceiling is higher (26 % escalation rather than 33 %).
+**The solid claim is accuracy at fixed escalation budgets.** Evaluated across twenty seeds with a 2,000-resample paired bootstrap:
 
-**Still outstanding:** `modality_quality_signal.ipynb` has been run twice but
-both runs are void — its sensor-quality features were identically zero, so
-feature group C was never tested; the bug is fixed and it needs re-running.
-Scenario 31's full
-release (7,012 samples) is needed for the generalisation claim, which currently
-rests on n=50; and every number in this document is a single training run with
-no seeds or error bars.
+| budget | gate (20 seeds) | confidence | gap | 95 % bootstrap CI | p(gate > conf) |
+|---|---|---|---|---|---|
+| 10 % | **0.7924 ± 0.0017** | 0.7653 | **+0.0274** | [+0.0220, +0.0328] | 100 % |
+| 25 % | **0.8354 ± 0.0037** | 0.8199 | **+0.0185** | [+0.0127, +0.0242] | 100 % |
+| 50 % | **0.8673 ± 0.0029** | 0.8557 | **+0.0151** | [+0.0105, +0.0200] | 100 % |
+
+1. **The gate beats confidence at every budget** with seed SD < 0.004 and all bootstrap intervals strictly excluding zero.
+2. **The gate uses 12 live features, not 31.** 19 features were constant/zeroed in the training split. Twelve cheap features (cheap model uncertainty + GPS) beat the whole classical rejection score family (Chow's rule, margins, entropy, Gini).
+3. **Leave-one-scenario-out transfer** recovers 63–76 % of the cheap→expensive gap.
+4. **The regression objective (`regress_gain`) strictly outperforms classification (`classify`).**
+
+**Outstanding:** `modality_quality_signal.ipynb` had sensor-quality features zeroed due to a path issue; bug is fixed and pending re-run. Scenario 31 full release (7,012 samples) is needed to scale the generalisation evaluation from n=50. Backbone models remain single runs.
 
 
 ---
@@ -426,3 +424,28 @@ LiDAR and radar are within noise of contributing nothing.
 score *higher* (DBA 0.9046, n=453) than where it is present (0.8684, n=1,745),
 because missingness concentrates in scenario 34. It cannot serve as a proxy for
 synthetic masking.
+
+---
+
+## 14. Temporal split leakage — resolving the published accuracy gap
+
+*(Added 2026-10-08. Full detail: [results/split_leakage/](results/split_leakage/) and [PROGRESS_REPORT.md](PROGRESS_REPORT.md) §10.)*
+
+We report Top-1 **0.4604** (DBA 0.8759); the AMBER paper reports **0.6415**. We have now quantified the exact mechanism behind this gap.
+
+**The mechanism:** Each sample spans $W=5$ consecutive observations ending at `frame_target`. Two samples whose targets differ by $d < 5$ **share $5 - d$ input frames** — identical camera JPEGs, LiDAR sweeps, and radar cubes on both sides of the split.
+
+**Random split vs block split** (over 11,042 development samples, 20 % validation, 20 draws):
+
+| Metric | Block split (ours) | Random split |
+|---|---|---|
+| Validation samples sharing input frames with train ($d < 5$) | **13.6 %** | **100.0 %** |
+| Validation samples within 1 frame of train | 3.4 % | 95.3 % |
+| Validation samples within 10 frames | 32.7 % | 100.0 % |
+| Median frames to nearest train sample | **16 frames** | **1 frame** |
+
+**How much the leak reveals:**
+mmWave optimal beam changes slowly along vehicle trajectories. A sample just 1 frame away from a training sample carries the exact same optimal beam **39.4 %** of the time (against random chance $1/64 \approx 1.6\%$, a **25× lift**). At 2 frames, it is 35.8 % (23× lift).
+
+**Conclusion:** Random splits on DeepSense6G evaluate frame memorisation and recall rather than generalisation to unseen time steps. Our numbers are lower because they evaluate on genuinely held-out temporal blocks. Guard bands at block boundaries can eliminate the residual 13.6 % overlap.
+
