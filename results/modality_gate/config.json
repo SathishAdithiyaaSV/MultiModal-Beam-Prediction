@@ -1,0 +1,101 @@
+{
+  "quick_run": false,
+  "split": "val",
+  "n_samples": 2198,
+  "f0": "gps",
+  "experts": [
+    "gps_lidar",
+    "gps_radar",
+    "gps_radar_lidar",
+    "gps_image",
+    "gps_image_lidar",
+    "gps_radar_image",
+    "gps_radar_image_lidar"
+  ],
+  "gflops": {
+    "gps": 0.3869,
+    "gps_radar": 23.5668,
+    "gps_lidar": 23.053,
+    "gps_radar_lidar": 46.2328,
+    "gps_image": 48.2398,
+    "gps_image_lidar": 70.9058,
+    "gps_radar_image": 71.4196,
+    "gps_radar_image_lidar": 94.0856
+  },
+  "c_probe": 0.01,
+  "features": [
+    "top1_conf",
+    "top2_conf",
+    "margin_12",
+    "margin_15",
+    "entropy",
+    "top5_mass",
+    "pred_beam_norm",
+    "avail_radar",
+    "avail_beam",
+    "avail_count",
+    "gps_step",
+    "gps_step_x",
+    "gps_step_y",
+    "gps_radius",
+    "img_sharpness",
+    "img_sharpness_coarse",
+    "img_hf_ratio",
+    "img_dark_frac",
+    "img_temporal_change",
+    "lidar_points",
+    "lidar_occupancy",
+    "lidar_mean_count",
+    "lidar_temporal_change",
+    "radar_peak",
+    "radar_mean",
+    "radar_peak_to_mean",
+    "radar_energy_frac_top1pct"
+  ],
+  "features_no_probe": [
+    "top1_conf",
+    "top2_conf",
+    "margin_12",
+    "margin_15",
+    "entropy",
+    "top5_mass",
+    "pred_beam_norm",
+    "avail_radar",
+    "avail_beam",
+    "avail_count",
+    "gps_step",
+    "gps_step_x",
+    "gps_step_y",
+    "gps_radius"
+  ],
+  "dropped_constant": [
+    "avail_gps",
+    "avail_image",
+    "avail_lidar",
+    "gps_at_boundary"
+  ],
+  "gate": {
+    "hidden": 32,
+    "epochs": 400,
+    "seeds": [
+      0,
+      1,
+      2,
+      3,
+      4
+    ],
+    "parameters": 2183,
+    "objective": "MSE on per-expert DBA gain"
+  },
+  "cross_fit": {
+    "folds": 5,
+    "block_frames": 50
+  },
+  "health_fault": [
+    "image",
+    "blur",
+    2.0
+  ],
+  "health_frac": 0.5,
+  "router_lambda": 0.0044958372906725615
+}

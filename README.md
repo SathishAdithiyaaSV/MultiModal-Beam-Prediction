@@ -64,6 +64,10 @@ instant.
 │   ├── metrics.py                # Top-K and DBA, (37)-(39)
 │   ├── dataset.py                # torch Dataset over the processed index
 │   └── train.py                  # training / evaluation entry point
+├── notebooks/
+│   └── modality_gate.ipynb       # executed Kaggle notebook for cost-aware routing
+├── results/
+│   └── modality_gate/            # full validation run and trained routing gate
 ├── tests/test_amber.py           # 24 invariants checked against the paper
 ├── pytest.ini
 └── references/                   # reference-paper index (PDFs are git-ignored)
