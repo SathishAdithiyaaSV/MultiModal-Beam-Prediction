@@ -551,4 +551,9 @@ matches the paper. Report which you used.
 
 Official GPS-only LSTM baseline as a label/evaluation sanity check → train
 AMBER → modality ablations → the difficulty and marginal-utility analysis →
-only then the adaptive cost-aware gate.
+the two-tier adaptive gate → the full eight-expert gate in
+[`notebooks/modality_gate.ipynb`](notebooks/modality_gate.ipynb). The latest
+gate's outputs and evaluation caveats are documented in
+[`results/modality_gate/README.md`](results/modality_gate/README.md). Further
+work should validate routing on independent temporal blocks or scenarios and
+account for sensor acquisition costs, not just model GFLOPs.

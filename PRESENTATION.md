@@ -1,6 +1,6 @@
 # Multimodal mmWave Beam Prediction — Results So Far
 
-DeepSense6G 2022, scenarios 31–34 · AMBER baseline · modality ablation
+DeepSense6G 2022, scenarios 31–34 · AMBER · modality ablation · adaptive routing
 
 > Every number here is measured and traceable to a file in `results/`.
 > Nothing is projected or estimated.
@@ -29,7 +29,8 @@ when they are not needed?
 | AMBER baseline | trained |
 | Modality ablation | **8 configurations, complete** |
 | KD radar-only baseline | trained (on earlier data) |
-| Adaptive gate | not built — the ablation just changed what it should be |
+| Two-tier learned gate | complete — beats confidence at fixed budgets |
+| Eight-expert modality gate | complete — full validation run with camera-fault experiment |
 
 **What this means.** The foundation is done. The results below are what it
 produced, and they redirect the research plan.
@@ -301,7 +302,7 @@ Don't build it.
 
 ---
 
-## 16 · The gate beats 6 of the 8 fixed configurations
+## 16 · Oracle routing reaches points no fixed configuration can
 
 The notebook compared only against the *best* one. Against all eight, the gate
 dominates — better DBA **and** fewer GFLOPs — 6 of them at one
@@ -330,7 +331,13 @@ frontier rather than against one point, the contribution holds.
 
 ---
 
-## 16b · The learned gate — it works
+## 16b · Earlier two-tier learned gate — it works
+
+This is the earlier GPS → GPS + Camera study in
+[`results/adaptive_gate/`](results/adaptive_gate/). The newer all-expert router
+is a separate experiment in §16e; its budget numbers are not directly
+comparable because it chooses among eight experts and uses a different cost
+objective.
 
 A **2,113-parameter MLP** over inference-available features (cheap-model
 uncertainty, availability mask, GPS statistics). No beam
@@ -448,6 +455,57 @@ lidar **−0.0003**, radar **−0.0012**, gps −0.0214, image **−0.4373**.
 
 ---
 
+## 16e · Newest result — route among all eight experts
+
+The executed
+[`notebooks/modality_gate.ipynb`](notebooks/modality_gate.ipynb) extends routing
+beyond a GPS/GPS+Camera cascade. It selects among GPS alone and all seven
+multimodal subsets using a 2,183-parameter, seven-output DBA-gain regressor.
+The full validation split has 2,198 samples; gate predictions are cross-fitted
+over five temporal folds and five seeds. The gate uses 27 non-constant
+inference-available features, including 13 sensor-health probes.
+
+**Clean validation DBA under GFLOPs budgets:**
+
+| policy | ≤5 GFLOPs | ≤12 GFLOPs | ≤24 GFLOPs | ≤48 GFLOPs |
+|---|---:|---:|---:|---:|
+| learned gate, all modalities + probes | 0.7810 | 0.8229 | 0.8476 | 0.8638 |
+| **learned gate, no sensor probes** | **0.7911** | **0.8302** | **0.8583** | **0.8713** |
+| confidence → GPS + Camera | 0.7608 | 0.8181 | 0.8530 | **0.8840** |
+| best fixed expert | 0.7298 | 0.7298 | 0.7794 | 0.8025 |
+| oracle (true per-sample gains) | 0.8587 | 0.9134 | 0.9542 | 0.9555 |
+
+At 5–24 GFLOPs, learned routing improves over the best fixed choice under the
+same budget. It does **not** beat the confidence cascade at 48 GFLOPs, and its
+no-probe version outperforms the probe-based gate at every clean budget shown.
+The oracle remains an unattainable upper bound, not a deployable policy.
+
+**Camera-blur experiment (blur σ=2 on half the samples):** at a 24-GFLOP
+budget, the probe gate routes camera experts on 42.7 % of clean samples but
+only 10.6 % of blurred samples; its faulty-subset DBA is 0.7900. The no-probe
+gate uses camera at nearly the same rate on clean and blurred samples (15.6 %
+and 15.4 %) and gets 0.8018 DBA on the faulty subset. This shows that the
+probes change routing in response to the injected fault, but **does not show a
+net accuracy benefit** over the no-probe policy.
+
+The notebook's online router agreed with its offline selection on the demo
+samples (100 %) and measured 36.3 ms mean latency versus 47.0 ms for always
+running the four-modality model. This is a notebook-level latency measurement,
+not a system-level sensing-cost result.
+
+**Limits before making an efficiency claim:** the reported budget is an
+estimated GFLOPs cost; it does not charge for acquiring or reading camera,
+LiDAR or radar data. Several gate features require those sensor tensors, so the
+measured saving is about encoder processing, not sensor acquisition. Also,
+cross-fitting keeps each sample out of its own gate fit, but folds, lambda
+sweeps and reported results all use the same validation split; independent
+scenario/time-block evaluation is still needed.
+
+*Files: [`results/modality_gate/`](results/modality_gate/), including the
+[run summary](results/modality_gate/README.md).*
+
+---
+
 ## 17 · Honest limitations
 
 - **10 epochs**, not to convergence. Best epochs were 8–10, so the ranking is
@@ -470,9 +528,16 @@ lidar **−0.0003**, radar **−0.0012**, gps −0.0214, image **−0.4373**.
   has no training samples.)*
 - **Single training run per configuration.** No seeds, no error bars. Some
   Pareto orderings (0.8835 vs 0.8759) may not survive repetition.
-- **The gate is compared only against confidence thresholding**, not against the
-  cascade / early-exit / learning-to-defer literature.
-- **45 % of samples are wrong under both tiers**, which caps any routing gain.
+- **The new eight-expert router is not an independent test:** its cross-fitting,
+  budget sweep and evaluation all use the same validation split.
+- **The new router's GFLOPs budget omits sensor acquisition/read costs.** Its
+  health probes require sensor tensors; the no-probe gate scored better on the
+  clean validation budgets.
+- **The earlier GPS/GPS+Camera gate and the new eight-expert gate use different
+  protocols and cost objectives.** Do not compare their budget figures as if
+  they were one experiment.
+- **Backbone configurations remain single runs**, with no training-seed error
+  bars.
 
 ---
 
@@ -486,10 +551,11 @@ lidar **−0.0003**, radar **−0.0012**, gps −0.0214, image **−0.4373**.
 | ✅ | KD radar-only student (Baseline 5) — stale data, own protocol |
 | ✅ | Oracle routing analysis — headroom real, confidence gate weak |
 | ✅ | **Learned adaptive gate — beats confidence across budgets (+0.0274 to +0.0151 DBA, 23 % ± 13 % compute saved)** |
+| ✅ | **Eight-expert modality gate — full validation run; no-probe gate leads on clean budgets; camera probes react to injected blur** |
 | ❌ | Difficulty-aware gating — **ruled out**, scores below confidence |
 | ✅ | Modality robustness — tipping points; masking fails without camera |
 | ✅ | **Temporal split leakage quantified — resolves published gap (100 % frame sharing in random split)** |
-| ⚠️ | Quality-signal notebook — run twice, both void (sensor features zero); fixed, needs re-running |
+| ⚠️ | Dedicated quality-signal study — prior runs were void; the newer router tests sensor probes but does not establish a clean-accuracy benefit |
 | ⚠️ | Seeds / error bars — **done for adaptive gate (20 seeds, 2,000 bootstrap)**; backbone models remain single runs |
 | ⬜ | Scenario 31 full release — needed for the generalisation claim |
 | ⬜ | Official GPS-only LSTM (Baseline 1) |
@@ -502,6 +568,6 @@ high-precision positioning; camera — the only expensive
 modality that pays — is also the one that fails on unseen environments; and
 per-sample routing has real headroom (+0.089 Top-1 at a quarter of the compute)
 that confidence thresholding cannot reach but a small learned gate partly can,
-beating confidence at every budget (+0.0274 DBA at 10 % escalation, 23 % ± 13 % compute saved to match).*
-
-
+beating confidence at every budget (+0.0274 DBA at 10 % escalation). A newer
+eight-expert gate improves on fixed experts at tight compute budgets, but its
+sensor probes do not improve clean DBA and its cost model omits sensor acquisition.*

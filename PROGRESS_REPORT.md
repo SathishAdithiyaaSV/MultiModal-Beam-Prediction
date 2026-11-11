@@ -1,6 +1,6 @@
 # Adaptive Modality Routing for mmWave Beam Prediction
 
-### Progress report — 8 October 2026
+### Progress report — 11 November 2026
 
 Predicting the optimal beam out of 64 from multimodal vehicle sensing.
 DeepSense6G 2022, scenarios 31–34. Each sample carries 5 camera frames, 5 LiDAR
@@ -24,6 +24,7 @@ Five results, in the order they build on each other.
 | 4 | **Perfect per-sample routing would beat the always-expensive model at a quarter of its compute.** The headroom is real and measured. |
 | 5 | **A random split on this dataset leaks 100 % of validation samples**, which explains the gap to published accuracy figures. |
 | 6 | **A small learned gate beats every standard routing rule** — +0.027 DBA at 10 % escalation, +0.019 at 25 %, bootstrap CIs excluding zero, stable across twenty seeds. |
+| 7 | **A full-expert gate improves on fixed experts at tight compute budgets**, but sensor probes do not improve clean DBA; this is a same-validation-split result, not an independent test. |
 
 One analysis is still outstanding; it is identified in *Work remaining*.
 
@@ -259,10 +260,11 @@ shift of 0.002 moves it by tens of percent. It is too brittle to carry a
 headline. The fixed-budget numbers measure the same advantage stably, and are
 what we now lead with.
 
-**The gate also turns out to use 12 features, not 31** — nineteen are constant
-and contribute nothing. That strengthens rather than weakens the finding:
-twelve cheap signals beat the entire classical rejection-score family. It also
-means the sensor-quality idea remains genuinely untested.
+**The earlier two-tier gate turns out to use 12 features, not 31** — nineteen
+are constant and contribute nothing. That strengthens rather than weakens its
+finding: twelve cheap signals beat the entire classical rejection-score family.
+The newer eight-expert experiment separately uses 13 sensor-health probes;
+these do not improve clean-validation DBA over the no-probe variant.
 
 ### It beats the whole uncertainty family, not just confidence
 
@@ -296,6 +298,47 @@ the model's modalities.
 
 ---
 
+## 7b · The newer gate chooses among all eight experts
+
+The executed
+[`notebooks/modality_gate.ipynb`](notebooks/modality_gate.ipynb) expands routing
+from the earlier GPS/GPS+Camera cascade to GPS plus all seven multimodal
+experts. It ran 2,198 validation samples, five temporal folds and five seeds,
+with a 2,183-parameter regressor over 27 non-constant features (13 sensor-health
+probes).
+
+DBA at estimated budgets of 5 / 12 / 24 / 48 GFLOPs:
+
+| policy | 5 | 12 | 24 | 48 |
+|---|---:|---:|---:|---:|
+| learned gate, all modalities + probes | 0.7810 | 0.8229 | 0.8476 | 0.8638 |
+| **learned gate, no probes** | **0.7911** | **0.8302** | **0.8583** | **0.8713** |
+| confidence → GPS + Camera | 0.7608 | 0.8181 | 0.8530 | **0.8840** |
+| best fixed expert | 0.7298 | 0.7298 | 0.7794 | 0.8025 |
+
+At 5–24 GFLOPs, learned expert selection beats the best fixed expert under
+the same estimated budget. At 48 GFLOPs, the confidence cascade does better.
+The no-probe gate leads the learned variants at every clean budget shown.
+
+With camera blur σ=2 injected in half of the samples, the probe gate sends
+42.7 % of clean samples but only 10.6 % of faulty samples to a camera expert.
+This confirms a routing response to this synthetic fault, not a net accuracy
+benefit: on the faulty subset, DBA is 0.7900 with probes and 0.8018 without.
+The estimated GFLOPs budget excludes sensor acquisition/read costs even though
+sensor probes require sensor tensors.
+
+**Evaluation caveat:** the gate's predictions are cross-fitted, but the
+cross-validation folds, budget sweep and reported metrics all come from the
+same validation split. Independent temporal-block or scenario evaluation is
+needed before treating these numbers as generalisation performance. The online
+router's 36.3 ms vs 47.0 ms measurement is notebook-level, not an end-to-end
+sensing-cost measurement.
+
+Full output inventory and limitations:
+[`results/modality_gate/README.md`](results/modality_gate/README.md).
+
+---
+
 ## 8 · What this adds up to
 
 **The original plan did not survive contact with the data, and what replaced it
@@ -304,10 +347,12 @@ difficulty. Both halves failed on evidence: radar does not pay for itself, and
 difficulty measures score below plain confidence. The replacement — a GPS cheap
 tier with a learned gain-regression gate — outperforms both.
 
-**We have a quantified efficiency result:** the gate beats confidence
-thresholding and all five other standard rejection scores at every escalation
+**We have a quantified efficiency result:** the earlier two-tier gate beats confidence
+thresholding and all six standard rejection scores at every escalation
 budget, with bootstrap intervals excluding zero and seed variation under 0.004,
-plus demonstrated cross-scenario transfer.
+plus demonstrated cross-scenario transfer. The newer full-expert gate adds
+promising fixed-expert improvements at tight estimated budgets, but needs
+independent evaluation and a sensing-aware cost model.
 
 **But our strongest contribution may not be the routing work.** The evidence
 points at a more uncomfortable and more interesting claim: *most modalities in
@@ -374,6 +419,8 @@ submission, reported both ways.
 - **45 % of samples are wrong under both tiers**, which caps any routing gain.
 - **Routing is measured in-domain.** Transfer is tested by holding out
   scenarios, but scenario 31 cannot be tested that way, having no training data.
+- **The eight-expert router's reported budgets omit sensor acquisition/read
+  costs**, and its gate selection and budget sweep use the same validation split.
 - **Models trained 10 epochs**, not to convergence. Best epochs were 8–10, so
   rankings are likely stable; absolute numbers would rise.
 
@@ -381,30 +428,33 @@ submission, reported both ways.
 
 ## 11 · Work remaining
 
-**Outstanding analysis.** One experiment is incomplete: separating routing
-signals by *what they cost to obtain*. Some signals are free before any expensive
-sensor is read; others require reading the camera first. Which set we are allowed
-to use depends on whether the dominant cost is *processing* the sensor data or
-*acquiring* it — and the two give different answers. The first two attempts at
-this analysis were invalid due to a defect in feature extraction, now fixed and
-guarded. It needs one ~25-minute re-run.
+**Outstanding analysis.** The dedicated `modality_quality_signal` feature-group
+experiment has not yet been rerun with the extraction fix. The newer
+eight-expert gate does include sensor-health probes, but it does not replace
+that controlled comparison: the no-probe variant performs better on clean
+validation DBA, and the reported compute budget does not charge for sensor
+acquisition. Signals that require reading camera/LiDAR/radar are admissible
+under a processing-cost model, not necessarily under a sensing-cost model.
 
 **Before any submission, in priority order:**
 
 1. **Obtain scenario 31's full release** (7,012 samples). Our most interesting
    finding currently rests on 50 samples. This is the single highest-value
    action available.
-2. **Add seeds and error bars.** Mechanical, cheap, and removes the most common
-   reviewer objection. Better that we find a fragile ordering than a referee.
-3. **Resolve the absolute-accuracy question** against the AMBER paper. If our
-   protocol explains the gap, that is defensible and interesting; if the
-   reimplementation underperforms, every comparison rests on a weak base. This
-   is the highest-priority unknown.
-4. **Extend the baseline comparison.** The gate is now measured against six
-   standard rejection scores from the selective-prediction literature and beats
-   all of them. Still to add: a trained learning-to-defer surrogate, and
-   architectural early-exit methods (BranchyNet, MSDNet), both of which need
-   their own training runs rather than a rescoring of existing outputs.
+2. **Add backbone seeds and error bars.** Some close ablation orderings may
+   not survive repetition; the gate seeds are already complete for the
+   earlier two-tier experiment.
+3. **Reduce residual split leakage.** The temporal analysis explains the
+   published accuracy gap, but 13.6 % of validation samples still share input
+   frames with training samples. Evaluate with a guard band and report both.
+4. **Independently evaluate the eight-expert router.** Its five-fold
+   cross-fitted predictions and budget sweep use the same validation split.
+   Evaluate on held-out temporal blocks or scenarios, and include sensor
+   acquisition/read costs if claiming end-to-end savings.
+5. **Extend the baseline comparison.** The earlier two-tier gate is measured
+   against six standard rejection scores and beats all of them. Still to add:
+   a trained learning-to-defer surrogate and architectural early-exit methods
+   (BranchyNet, MSDNet), which need their own training runs.
 
 ---
 

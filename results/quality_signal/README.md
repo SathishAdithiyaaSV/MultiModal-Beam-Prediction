@@ -83,10 +83,20 @@ survives the full split is unknown.
 constant columns. Its headline result is **unaffected** — constant features
 contribute exactly zero, so the gate genuinely achieved 34 % compute saving
 against confidence's 13 % using the 18 informative features. But it means the
-gate has **never been given sensor-quality information**, so that result is a
-floor, not a ceiling. Re-running it with the fix may improve it.
+earlier two-tier gate was never given sensor-quality information.
+
+The separate, newer [`../modality_gate/`](../modality_gate/) experiment does
+include 13 sensor-health probes in its full-expert gate. On clean validation
+data, its no-probe variant scores higher at every tested compute budget. Under
+injected camera blur, probes route away from camera experts more often, but the
+no-probe gate still scores higher on the faulty subset. This tests a different
+router and does not replace the corrected, dedicated feature-group analysis
+described here.
 
 ## Next
 
-1. Re-run with the fix and `QUICK_RUN = False`.
-2. Re-run the gate with the fix; compare against the current 66 % escalation.
+1. Re-run this dedicated feature-group experiment with the fix and
+   `QUICK_RUN = False`.
+2. If the two-tier gate is revisited, evaluate sensor probes as a separate
+   feature-group comparison; the eight-expert result is not directly
+   comparable to its 66 % single-seed escalation statistic.

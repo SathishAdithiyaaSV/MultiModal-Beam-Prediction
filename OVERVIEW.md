@@ -6,11 +6,12 @@ All results obtained so far, with the caveats that qualify them.
 camera, LiDAR, radar and GPS. DeepSense6G 2022 Multi-Modal, scenarios 31–34.
 
 **Status.** Preprocessing complete. AMBER baseline trained. The
-eight-configuration modality ablation is complete and is the main result. The
-oracle routing analysis is complete and has answered whether adaptive routing is
-worth pursuing — partly yes, with the limitation now located precisely in the
-gate signal. A knowledge-distillation baseline has run on an earlier version of
-the data.
+eight-configuration modality ablation is complete and remains the main result.
+Routing has two separate completed studies: a two-tier GPS/GPS+Camera gate and
+a newer eight-expert gate with a camera-blur experiment. The broader gate finds
+that sensor probes react to injected blur but do not improve clean-validation
+DBA over the no-probe variant. A knowledge-distillation baseline has run on an
+earlier version of the data.
 
 ---
 
@@ -333,8 +334,9 @@ PY=~/.venvs/beamprep/bin/python bash preprocessing_amber/run_preprocessing.sh
 
 Then on Kaggle: `notebooks/amber_baseline.ipynb` for §3,
 `notebooks/modality_ablation_part{1,2}.ipynb` plus
-`notebooks/modality_ablation_report.ipynb` for §4, and
-`notebooks/oracle_routing.ipynb` for §6.
+`notebooks/modality_ablation_report.ipynb` for §4,
+`notebooks/oracle_routing.ipynb` for §6, and
+`notebooks/modality_gate.ipynb` for the eight-expert routing result in §15.
 
 Full detail: [README.md](README.md) for preprocessing and the data findings,
 [results/amber/README.md](results/amber/README.md) for the baseline runs,
@@ -381,7 +383,13 @@ tier (0.39 GFLOPs) and GPS + Camera as the expensive one (48.24):
 3. **Leave-one-scenario-out transfer** recovers 63–76 % of the cheap→expensive gap.
 4. **The regression objective (`regress_gain`) strictly outperforms classification (`classify`).**
 
-**Outstanding:** `modality_quality_signal.ipynb` had sensor-quality features zeroed due to a path issue; bug is fixed and pending re-run. Scenario 31 full release (7,012 samples) is needed to scale the generalisation evaluation from n=50. Backbone models remain single runs.
+**Outstanding:** the dedicated `modality_quality_signal.ipynb` comparison had
+sensor-quality features zeroed and still needs a corrected run. A separate,
+newer eight-expert experiment does use sensor-health probes, but its no-probe
+gate scores higher on clean validation data and higher on the injected
+camera-fault subset; see §15. Scenario 31's full release (7,012 samples) is
+needed to scale the generalisation evaluation from n=50. Backbone models
+remain single runs.
 
 
 ---
@@ -449,3 +457,30 @@ mmWave optimal beam changes slowly along vehicle trajectories. A sample just 1 f
 
 **Conclusion:** Random splits on DeepSense6G evaluate frame memorisation and recall rather than generalisation to unseen time steps. Our numbers are lower because they evaluate on genuinely held-out temporal blocks. Guard bands at block boundaries can eliminate the residual 13.6 % overlap.
 
+## 15. Eight-expert modality gate — latest routing experiment
+
+The executed [`notebooks/modality_gate.ipynb`](notebooks/modality_gate.ipynb)
+extends the earlier two-tier gate by selecting among GPS alone and all seven
+multimodal experts. It uses 2,198 validation samples, five temporal folds and
+five gate seeds. Unlike the earlier gate, its outputs are **not an independent
+test result**: the cross-fitted predictions, budget sweep and reported metrics
+all use the same validation split.
+
+At estimated compute budgets of 5 / 12 / 24 / 48 GFLOPs, the no-probe gate
+achieves DBA **0.7911 / 0.8302 / 0.8583 / 0.8713**. The all-feature gate with
+13 sensor-health probes scores **0.7810 / 0.8229 / 0.8476 / 0.8638**; the
+confidence-to-GPS+Camera cascade scores **0.7608 / 0.8181 / 0.8530 / 0.8840**.
+Thus adaptive expert selection improves on the best fixed expert at the
+5–24-GFLOP budgets, but the cascade is stronger at 48 GFLOPs. The no-probe
+variant beats the probe variant on clean validation at every budget shown.
+
+With camera blur σ=2 injected in half the samples, the probe gate uses camera
+experts on 42.7 % of clean samples versus 10.6 % of faulty samples. This is
+evidence that the probes react to this injected fault, not that they improve
+accuracy: on the faulty subset, the no-probe gate scores DBA 0.8018 versus
+0.7900 with probes. The estimated GFLOPs cost excludes sensor acquisition and
+reading, even though probe features require sensor tensors; interpret these as
+encoder-processing results, not end-to-end sensing savings.
+
+Full metrics, output inventory and limitations:
+[`results/modality_gate/README.md`](results/modality_gate/README.md).

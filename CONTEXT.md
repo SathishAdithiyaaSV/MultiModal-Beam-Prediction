@@ -1,7 +1,7 @@
 # CONTEXT.md — full project handoff
 
-Everything a new agent or collaborator needs to continue this work. Written
-2026-10-07. Read this first, then `OVERVIEW.md` (narrative) and
+Everything a new agent or collaborator needs to continue this work. Updated
+2026-11-11. Read this first, then `OVERVIEW.md` (narrative) and
 `PRESENTATION.md` (slide-shaped results).
 
 ---
@@ -38,7 +38,7 @@ most samples, escalate only the ones that need an expensive one.
 .
 ├── CONTEXT.md             <- this file
 ├── OVERVIEW.md            <- high-level narrative of everything done
-├── PRESENTATION.md        <- slide-shaped results, 18 slides
+├── PRESENTATION.md        <- slide-shaped results
 ├── README.md              <- setup, commands, API reference
 ├── amber/                 <- the model package (16 modules)
 ├── preprocessing_amber/   <- raw DeepSense -> tensors + index
@@ -80,8 +80,9 @@ Run: `bash preprocessing_amber/run_preprocessing.sh`
 
 ### `notebooks/` — everything runs on Kaggle
 
-Notebooks are **generated**, never hand-edited. Edit the `_build_*.py` script
-and re-run it.
+Most notebooks are **generated**; edit the `_build_*.py` script and re-run it
+for those notebooks. `modality_gate.ipynb` is an executed Kaggle notebook
+without a local builder.
 
 | builder | produces |
 |---|---|
@@ -90,6 +91,7 @@ and re-run it.
 | `_build_report_nb.py` | `modality_ablation_report.ipynb` |
 | `_build_oracle_nb.py` | `oracle_routing.ipynb` |
 | `_build_adaptive_nbs.py` | `modality_robustness.ipynb`, `modality_quality_signal.ipynb`, `learned_adaptive_gate.ipynb` |
+| executed Kaggle notebook (no local builder) | `modality_gate.ipynb`; outputs in `results/modality_gate/` |
 
 **Known trap:** generating notebooks with nested triple-quoted heredocs fails.
 Use `'''` inside cell bodies when the outer string is `"""`. This bit three
@@ -208,7 +210,7 @@ Full run, n=2,198 at every point. See that directory's README for detail.
 - **Natural missingness is confounded** — radar-absent samples score *higher*
   (0.9046 vs 0.8684), as missingness concentrates in scenario 34.
 
-### 4.3 Learned adaptive gate (`results/adaptive_gate/full_run/`) — **the newest result**
+### 4.3 Learned adaptive gate (`results/adaptive_gate/full_run/`) — earlier two-tier result
 
 Cheap tier GPS (0.39 GFLOPs), expensive tier GPS + Camera (48.24),
 `cost(f) = 0.3869 + f·(48.2398 − 0.3869)`. Gate is a 2,113-parameter MLP over
@@ -248,6 +250,43 @@ DBA at fixed escalation budgets:
   gain matches the metric; predicting the binary "cheap wrong, expensive right"
   label discards *how much* each sample gains. `classify` loses to plain
   confidence below 50 % escalation — drop that arm.
+
+### 4.4 Eight-expert modality gate (`results/modality_gate/`) — latest routing result
+
+The executed [`notebooks/modality_gate.ipynb`](notebooks/modality_gate.ipynb)
+selects among GPS alone and all seven multimodal subsets. It ran the full
+2,198-sample validation split with five temporal folds and five gate seeds.
+The model has 2,183 parameters and uses 27 non-constant inference-available
+features, including 13 sensor-health probes.
+
+DBA at estimated GFLOPs budgets of 5 / 12 / 24 / 48:
+
+| policy | 5 | 12 | 24 | 48 |
+|---|---:|---:|---:|---:|
+| learned gate, all modalities + probes | 0.7810 | 0.8229 | 0.8476 | 0.8638 |
+| **learned gate, no probes** | **0.7911** | **0.8302** | **0.8583** | **0.8713** |
+| confidence → GPS + Camera | 0.7608 | 0.8181 | 0.8530 | **0.8840** |
+| best fixed expert | 0.7298 | 0.7298 | 0.7794 | 0.8025 |
+
+The learned gates improve over the best fixed expert at 5–24 GFLOPs, while
+the confidence cascade is stronger at 48 GFLOPs. The no-probe variant beats
+the probe gate on clean data at all four budgets.
+
+Under camera blur σ=2 on half the samples, the probe gate routes to a camera
+expert for 42.7 % of clean samples and 10.6 % of faulty samples. This confirms
+the probes react to this injected fault, but not a net accuracy improvement:
+on the faulty subset the probe gate scores 0.7900 DBA and the no-probe gate
+0.8018. The online router matches offline expert selection on the demo samples
+and measured 36.3 ms mean latency versus 47.0 ms for always running all four
+modalities.
+
+**Interpretation constraints:** this notebook cross-fits gate predictions over
+five folds, but all folds, budget selection and reported performance use the
+same validation split; it is not an independent test. GFLOPs omit sensor
+acquisition/read costs, while sensor probes require sensor tensors. Treat this
+as an encoder-processing-cost experiment, not evidence of end-to-end sensing
+savings. Full inventory and caveats are in
+[`results/modality_gate/README.md`](results/modality_gate/README.md).
 - **Cross-scenario transfer works**: leave-one-scenario-out at 50 % escalation
   recovers 72 % / 63 % / 76 % of the cheap→expensive gap on scenarios 32/33/34.
 
@@ -319,35 +358,36 @@ the per-sample tables.
 | ✅ | AMBER baseline implemented and trained |
 | ✅ | Modality ablation, 8 configurations, Pareto frontier |
 | ✅ | Oracle routing — headroom real, confidence gate weak |
-| ✅ | Faithful degradations + 31 inference-available quality features |
+| ✅ | Faithful degradations + inference-available quality features |
 | ✅ | **Learned adaptive gate — beats confidence, 20 seeds + bootstrap complete** |
+| ✅ | **Eight-expert modality gate — full validation run and injected camera-blur study** |
 | ❌ | Difficulty-aware gating — **ruled out**, do not build |
 | ✅ | **`modality_robustness.ipynb` — run, full result** (camera tipping points; masking fails without camera) |
 | ✅ | **Temporal split leakage analysis — complete** (explains 0.4604 vs 0.6415 gap: 100 % frame sharing in random splits) |
-| ⚠️ | `modality_quality_signal.ipynb` — **run, but void** (sensor features were all zero; bug fixed, needs re-running) |
+| ⚠️ | `modality_quality_signal.ipynb` — prior runs void; the newer eight-expert gate tests sensor probes but does not show a clean-DBA benefit |
 | ⚠️ | Multiple seeds / error bars — **done for gate (20 seeds, 2,000 bootstrap)**; backbones remain single run |
 | ⬜ | Scenario 31 full release (7,012 samples) |
 | ⬜ | Official GPS-only LSTM baseline |
 
 ### Immediate next actions, in priority order
 
-1. **Re-run `modality_quality_signal`** with the feature-extraction fix and
-   `QUICK_RUN = False`; the first run is void. Then **re-run the gate** with the
-   same fix — it has never seen sensor-quality features, so its current saving
-   result is a floor. All need the preprocessed dataset plus the 8 checkpoints as Kaggle inputs.
-2. **Get the standalone scenario-31 release (7,012 samples).** The camera
+1. **Get the standalone scenario-31 release (7,012 samples).** The camera
    generalisation trap — the most interesting finding — currently rests on
    n=50. This converts an anecdote into a headline result.
-3. **Add backbone seeds.** 3–5 per configuration, report mean ± std. Some Pareto
+2. **Add backbone seeds.** 3–5 per configuration, report mean ± std. Some Pareto
    orderings (0.8835 vs 0.8759) may not survive this. Gate seeds (20 runs) are already completed.
-4. **Absolute-accuracy question — resolved.** Top-1 0.4604 vs AMBER's 0.6415 is
+3. **Absolute-accuracy question — resolved.** Top-1 0.4604 vs AMBER's 0.6415 is
    fully explained by temporal split leakage: random splitting leaks input frames into 100 %
    of validation samples (where 1-frame neighbours carry the same beam 39.4 % of the time).
    Our 0.4604 evaluates on genuinely held-out temporal blocks.
-5. **Baseline comparison, partly done.** The gate now beats six standard
-   selective-prediction rejection scores (Chow's rule, top1−top2 and top1−top5
-   margins, predictive entropy, 1−top5 mass, Gini): all need 87–94 % escalation
-   against the gate's 76.8 % ± 12.6 %. See `results/adaptive_gate/full_run/README.md`.
+4. **Independent routing evaluation.** The eight-expert run reuses the same
+   validation split across folds and budget selection. Evaluate on held-out
+   temporal blocks or scenarios, and include sensor acquisition/read costs if
+   making an end-to-end efficiency claim.
+5. **Baseline comparison, partly done.** The earlier two-tier gate beats six
+   standard selective-prediction rejection scores (Chow's rule, top1−top2 and
+   top1−top5 margins, predictive entropy, 1−top5 mass, Gini). See
+   `results/adaptive_gate/full_run/README.md`.
 
 
 ### Publication read
