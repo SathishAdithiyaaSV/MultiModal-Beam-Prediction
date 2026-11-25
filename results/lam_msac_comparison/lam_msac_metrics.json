@@ -1,0 +1,27 @@
+{
+  "validation": {
+    "top1": 0.35122838616371155,
+    "top3": 0.6633303165435791,
+    "top5": 0.8152866363525391,
+    "dba": 0.7868365049362183,
+    "dba_y1": 0.708098292350769,
+    "dba_y2": 0.7980891466140747,
+    "dba_y3": 0.854322075843811,
+    "n": 2198.0
+  },
+  "best_epoch": 10,
+  "config": {
+    "seed": 2022,
+    "epochs": 10,
+    "batch_size": 8,
+    "num_experts": 4,
+    "routing_top_k": 1,
+    "balance_weight": 0.01,
+    "modalities": [
+      "image",
+      "lidar",
+      "radar",
+      "gps"
+    ]
+  }
+}
